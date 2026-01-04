@@ -15,6 +15,7 @@
       <th>Публичный ID</th>
       <th>Название</th>
       <th>Город</th>
+      <th>KYC</th>
       <th>Подписка</th>
       <th>Блок</th>
       <th>Действия</th>
@@ -25,6 +26,20 @@
         <td>{{ company.public_id }}</td>
         <td>{{ company.name }}</td>
         <td>{{ company.city }}</td>
+        <td>
+          {% if 'kyc.verify' in g.permissions %}
+          <form method="post" action="{{ url_for('admin_companies_kyc', company_id=company.id) }}">
+            <select name="kyc_status">
+              <option value="pending" {% if company.kyc_status == 'pending' %}selected{% endif %}>Ожидает</option>
+              <option value="verified" {% if company.kyc_status == 'verified' %}selected{% endif %}>Проверено</option>
+              <option value="rejected" {% if company.kyc_status == 'rejected' %}selected{% endif %}>Отклонено</option>
+            </select>
+            <button type="submit">Сохранить</button>
+          </form>
+          {% else %}
+            {{ company.kyc_status or '-' }}
+          {% endif %}
+        </td>
         <td>
           {% if 'finance.manage' in g.permissions %}
           <form method="post" action="{{ url_for('admin_companies_subscription', company_id=company.id) }}">
