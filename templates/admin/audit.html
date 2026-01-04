@@ -1,0 +1,29 @@
+{% extends "admin/base.html" %}
+{% block title %}Журнал действий{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Audit Log</h2>
+  <table>
+    <tr>
+      <th>ID</th>
+      <th>Админ</th>
+      <th>Действие</th>
+      <th>Сущность</th>
+      <th>Meta</th>
+      <th>IP</th>
+      <th>Дата</th>
+    </tr>
+    {% for entry in entries %}
+      <tr>
+        <td>{{ entry.id }}</td>
+        <td>{{ entry.actor_username or '-' }}</td>
+        <td>{{ entry.action }}</td>
+        <td>{{ entry.entity_type or '-' }} {{ entry.entity_id or '' }}</td>
+        <td>{{ entry.meta_json }}</td>
+        <td>{{ entry.ip_address or '-' }}</td>
+        <td>{{ entry.created_at }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

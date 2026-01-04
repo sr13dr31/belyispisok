@@ -1,0 +1,12 @@
+{% extends "admin/base.html" %}
+{% block title %}Аналитика{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Аналитика (только чтение)</h2>
+  <table>
+    <tr><th>Компании</th><td>{{ stats.companies }}</td></tr>
+    <tr><th>Исполнители</th><td>{{ stats.masters }}</td></tr>
+    <tr><th>Апелляции на рассмотрении</th><td>{{ stats.pending_appeals }}</td></tr>
+  </table>
+</div>
+{% endblock %}
