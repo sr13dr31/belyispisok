@@ -40,6 +40,7 @@ from states import get_state, pop_state, set_state, clear_expired_states
 from utils import (
     format_company_profile,
     format_employment_reviews,
+    format_master_admin_profile,
     format_master_profile,
     format_master_public_profile,
     format_review_detail,
@@ -185,6 +186,17 @@ def rating_choice_kb():
         resize_keyboard=True,
         one_time_keyboard=True,
     )
+
+
+async def ensure_admin_access(target, *, alert: bool = True) -> bool:
+    user_id = target.from_user.id
+    if user_id in config.ADMIN_IDS:
+        return True
+    if isinstance(target, CallbackQuery):
+        await target.answer("Нет доступа.", show_alert=alert)
+    else:
+        await target.answer("Нет доступа.")
+    return False
 
 
 def ensure_company_can_act(company: dict, require_subscription: bool = True) -> Optional[str]:
@@ -1668,7 +1680,7 @@ async def cb_viewer_about(callback: CallbackQuery):
 
 @dp.message(Command("admin"))
 async def cmd_admin(message: Message):
-    if message.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(message, alert=False):
         return
     await message.answer(
         "Админ-панель:",
@@ -1678,7 +1690,7 @@ async def cmd_admin(message: Message):
 
 @dp.callback_query(F.data == "admin_companies")
 async def cb_admin_companies(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     with closing(get_conn()) as conn:
@@ -1700,7 +1712,7 @@ async def cb_admin_companies(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("admin_company_"))
 async def cb_admin_company_detail(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     try:
@@ -1722,7 +1734,7 @@ async def cb_admin_company_detail(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("admin_block_company_"))
 async def cb_admin_block_company(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     try:
@@ -1737,7 +1749,7 @@ async def cb_admin_block_company(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("admin_unblock_company_"))
 async def cb_admin_unblock_company(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     try:
@@ -1752,7 +1764,7 @@ async def cb_admin_unblock_company(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("admin_give_sub_"))
 async def cb_admin_give_sub(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     try:
@@ -1774,7 +1786,7 @@ async def cb_admin_give_sub(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "admin_masters")
 async def cb_admin_masters(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     with closing(get_conn()) as conn:
@@ -1796,7 +1808,7 @@ async def cb_admin_masters(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("admin_master_"))
 async def cb_admin_master_detail(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     try:
@@ -1811,14 +1823,14 @@ async def cb_admin_master_detail(callback: CallbackQuery):
         return
 
     await callback.message.answer(
-        format_master_profile(master, get_master_rating(master_id)),
+        format_master_admin_profile(master, get_master_rating(master_id)),
         reply_markup=admin_master_detail_kb(master_id, bool(master.get("blocked"))),
     )
 
 
 @dp.callback_query(F.data.startswith("admin_block_master_"))
 async def cb_admin_block_master(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     try:
@@ -1833,7 +1845,7 @@ async def cb_admin_block_master(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("admin_unblock_master_"))
 async def cb_admin_unblock_master(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     try:
@@ -1848,7 +1860,7 @@ async def cb_admin_unblock_master(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "admin_appeals")
 async def cb_admin_appeals(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     with closing(get_conn()) as conn:
@@ -1879,7 +1891,7 @@ async def cb_admin_appeals(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("admin_appeal_"))
 async def cb_admin_appeal_detail(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
+    if not await ensure_admin_access(callback):
         return
 
     data = callback.data.split("_")
@@ -2002,6 +2014,10 @@ async def generic_message_handler(message: Message):
         return
 
     action = state.action
+    if action.startswith("admin_") and tg_id not in config.ADMIN_IDS:
+        pop_state(tg_id)
+        await message.answer("Нет доступа.")
+        return
 
     # === Регистрация исполнителя ===
     if action == "master_register_full_name":
