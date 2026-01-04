@@ -1,0 +1,22 @@
+{% extends "admin/base.html" %}
+{% block title %}Админ панель{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Сводка</h2>
+  <table>
+    <tr><th>Компании</th><td>{{ stats.companies }}</td></tr>
+    <tr><th>Исполнители</th><td>{{ stats.masters }}</td></tr>
+    <tr><th>Апелляции на рассмотрении</th><td>{{ stats.pending_appeals }}</td></tr>
+    <tr><th>Активные админы</th><td>{{ stats.active_admins }}</td></tr>
+  </table>
+</div>
+{% if 'data.export' in g.permissions %}
+<div class="card">
+  <h3>Экспорт данных</h3>
+  <div class="actions">
+    <a href="{{ url_for('admin_export_companies') }}">Экспорт компаний (CSV)</a>
+    <a href="{{ url_for('admin_export_masters') }}">Экспорт исполнителей (CSV)</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

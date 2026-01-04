@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Admin{% endblock %}</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f7f7f9; margin: 0; }
+    header { background: #1f2937; color: #fff; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; }
+    nav a { color: #fff; margin-right: 12px; text-decoration: none; font-size: 14px; }
+    nav a:last-child { margin-right: 0; }
+    main { padding: 20px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 14px; }
+    th { background: #f3f4f6; }
+    .card { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+    .actions { display: flex; gap: 8px; }
+    .badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #e5e7eb; }
+    .success { color: #065f46; }
+    .error { color: #b91c1c; }
+    form.inline { display: inline; }
+    input, select, button, textarea { font-size: 14px; padding: 6px 8px; }
+    textarea { width: 100%; }
+    .flash { margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <strong>Admin Panel</strong>
+  </div>
+  {% if g.admin %}
+  <nav>
+    {% if 'admin.view_dashboard' in g.permissions %}<a href="{{ url_for('admin_dashboard') }}">Главная</a>{% endif %}
+    {% if 'companies.view' in g.permissions %}<a href="{{ url_for('admin_companies') }}">Компании</a>{% endif %}
+    {% if 'masters.view' in g.permissions %}<a href="{{ url_for('admin_masters') }}">Исполнители</a>{% endif %}
+    {% if 'appeals.view' in g.permissions %}<a href="{{ url_for('admin_appeals') }}">Споры</a>{% endif %}
+    {% if 'analytics.view' in g.permissions %}<a href="{{ url_for('admin_analytics') }}">Аналитика</a>{% endif %}
+    {% if 'audit.view' in g.permissions %}<a href="{{ url_for('admin_audit') }}">Audit</a>{% endif %}
+    {% if 'admin.manage_admins' in g.permissions %}<a href="{{ url_for('admin_users') }}">Админы</a>{% endif %}
+  </nav>
+  <form method="post" action="{{ url_for('admin_logout') }}">
+    <button type="submit">Выйти ({{ g.admin.username }})</button>
+  </form>
+  {% endif %}
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash">
+        {% for category, message in messages %}
+          <div class="{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

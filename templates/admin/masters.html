@@ -1,0 +1,59 @@
+{% extends "admin/base.html" %}
+{% block title %}Исполнители{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Исполнители</h2>
+  <form method="get">
+    <input type="text" name="search" placeholder="Поиск по имени или ID" value="{{ search or '' }}" />
+    <button type="submit">Найти</button>
+  </form>
+</div>
+<div class="card">
+  <table>
+    <tr>
+      <th>ID</th>
+      <th>Публичный ID</th>
+      <th>ФИО</th>
+      <th>Телефон</th>
+      <th>Паспорт</th>
+      <th>Заметки</th>
+      <th>Блок</th>
+      <th>Действия</th>
+    </tr>
+    {% for master in masters %}
+      <tr>
+        <td>{{ master.id }}</td>
+        <td>{{ master.public_id }}</td>
+        <td>{{ master.full_name }}</td>
+        <td>{{ master.phone or '-' }}</td>
+        <td>{{ master.passport or '-' }}</td>
+        <td>
+          {% if 'support.manage' in g.permissions %}
+          <form method="post" action="{{ url_for('admin_masters_notes', master_id=master.id) }}">
+            <textarea name="notes" rows="2">{{ master.notes or '' }}</textarea>
+            <button type="submit">Сохранить</button>
+          </form>
+          {% else %}
+            {{ master.notes or '-' }}
+          {% endif %}
+        </td>
+        <td>{{ 'Да' if master.blocked else 'Нет' }}</td>
+        <td>
+          {% if 'masters.manage' in g.permissions %}
+          <form method="post" action="{{ url_for('admin_masters_block', master_id=master.id) }}">
+            <input type="hidden" name="blocked" value="{{ 0 if master.blocked else 1 }}" />
+            <button type="submit">{{ 'Разблокировать' if master.blocked else 'Заблокировать' }}</button>
+          </form>
+          {% endif %}
+          {% if 'kyc.verify' in g.permissions %}
+          <form method="post" action="{{ url_for('admin_masters_passport', master_id=master.id) }}">
+            <input type="hidden" name="passport_locked" value="{{ 0 if master.passport_locked else 1 }}" />
+            <button type="submit">{{ 'Разблокировать паспорт' if master.passport_locked else 'Заблокировать паспорт' }}</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

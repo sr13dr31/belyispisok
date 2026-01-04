@@ -1,10 +1,11 @@
 import calendar
+import json
 import secrets
 import sqlite3
 import string
 from contextlib import closing
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import DB_PATH
 from security import decrypt_passport, encrypt_passport
@@ -167,12 +168,177 @@ def init_db():
         """
         )
 
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT
+            )
+        """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_permissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                description TEXT
+            )
+        """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_role_permissions (
+                role_id INTEGER NOT NULL,
+                permission_id INTEGER NOT NULL,
+                PRIMARY KEY (role_id, permission_id),
+                FOREIGN KEY (role_id) REFERENCES admin_roles(id),
+                FOREIGN KEY (permission_id) REFERENCES admin_permissions(id)
+            )
+        """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role_id INTEGER NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_login_at TEXT,
+                FOREIGN KEY (role_id) REFERENCES admin_roles(id)
+            )
+        """
+        )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER,
+                action TEXT NOT NULL,
+                entity_type TEXT,
+                entity_id TEXT,
+                meta_json TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (actor_id) REFERENCES admin_users(id)
+            )
+        """
+        )
+        seed_admin_roles_permissions(conn)
+
 
 # Helpers ---------------------------------------------------------------------
 
 
+DEFAULT_ADMIN_PERMISSIONS: Tuple[Tuple[str, str], ...] = (
+    ("admin.view_dashboard", "Доступ к главной панели"),
+    ("admin.manage_admins", "Управление администраторами и ролями"),
+    ("companies.view", "Просмотр компаний"),
+    ("companies.manage", "Управление компаниями"),
+    ("masters.view", "Просмотр исполнителей"),
+    ("masters.manage", "Управление исполнителями"),
+    ("appeals.view", "Просмотр споров и апелляций"),
+    ("appeals.resolve", "Решение споров и апелляций"),
+    ("kyc.verify", "Верификация исполнителей и компаний"),
+    ("finance.view", "Просмотр финансовых данных"),
+    ("finance.manage", "Управление подписками и платежами"),
+    ("support.view", "Просмотр обращений поддержки"),
+    ("support.manage", "Операции поддержки и ручные правки"),
+    ("analytics.view", "Просмотр аналитики"),
+    ("audit.view", "Просмотр журнала действий"),
+    ("data.export", "Экспорт данных"),
+)
+
+DEFAULT_ADMIN_ROLES: Tuple[Tuple[str, str], ...] = (
+    ("SuperAdmin", "Полный доступ"),
+    ("Compliance", "Юрист и комплаенс"),
+    ("DisputeModerator", "Модератор споров"),
+    ("KYCOperator", "KYC оператор"),
+    ("Finance", "Финансы"),
+    ("Support", "Поддержка"),
+    ("Analyst", "Аналитик (только чтение)"),
+)
+
+DEFAULT_ADMIN_ROLE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
+    "SuperAdmin": tuple(code for code, _ in DEFAULT_ADMIN_PERMISSIONS),
+    "Compliance": (
+        "admin.view_dashboard",
+        "companies.view",
+        "companies.manage",
+        "masters.view",
+        "appeals.view",
+        "audit.view",
+        "data.export",
+    ),
+    "DisputeModerator": (
+        "admin.view_dashboard",
+        "appeals.view",
+        "appeals.resolve",
+        "audit.view",
+    ),
+    "KYCOperator": (
+        "admin.view_dashboard",
+        "masters.view",
+        "masters.manage",
+        "kyc.verify",
+        "audit.view",
+    ),
+    "Finance": (
+        "admin.view_dashboard",
+        "companies.view",
+        "finance.view",
+        "finance.manage",
+        "audit.view",
+    ),
+    "Support": (
+        "admin.view_dashboard",
+        "companies.view",
+        "masters.view",
+        "support.view",
+        "support.manage",
+        "audit.view",
+    ),
+    "Analyst": (
+        "admin.view_dashboard",
+        "analytics.view",
+    ),
+}
+
+
 def _row(row) -> Optional[Dict]:
     return dict(row) if row else None
+
+
+def seed_admin_roles_permissions(conn: sqlite3.Connection) -> None:
+    c = conn.cursor()
+    c.executemany(
+        "INSERT OR IGNORE INTO admin_roles (name, description) VALUES (?, ?)",
+        DEFAULT_ADMIN_ROLES,
+    )
+    c.executemany(
+        "INSERT OR IGNORE INTO admin_permissions (code, description) VALUES (?, ?)",
+        DEFAULT_ADMIN_PERMISSIONS,
+    )
+    c.execute("SELECT id, name FROM admin_roles")
+    roles = {row["name"]: row["id"] for row in c.fetchall()}
+    c.execute("SELECT id, code FROM admin_permissions")
+    permissions = {row["code"]: row["id"] for row in c.fetchall()}
+    assignments = []
+    for role_name, permission_codes in DEFAULT_ADMIN_ROLE_PERMISSIONS.items():
+        role_id = roles.get(role_name)
+        if not role_id:
+            continue
+        for code in permission_codes:
+            permission_id = permissions.get(code)
+            if permission_id:
+                assignments.append((role_id, permission_id))
+    c.executemany(
+        "INSERT OR IGNORE INTO admin_role_permissions (role_id, permission_id) VALUES (?, ?)",
+        assignments,
+    )
 
 
 def _migrate_legacy_passport(master_id: int, passport: Optional[str]) -> None:
@@ -1062,3 +1228,266 @@ def update_review_appeal_admin_decision(appeal_id: int, status: str, admin_comme
 def delete_review(review_id: int):
     with closing(get_conn()) as conn, conn:
         conn.execute("DELETE FROM reviews WHERE id = ?", (review_id,))
+
+
+# Admin panel -----------------------------------------------------------------
+
+
+def list_admin_roles() -> List[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM admin_roles ORDER BY name")
+        return [dict(row) for row in c.fetchall()]
+
+
+def list_admin_permissions() -> List[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM admin_permissions ORDER BY code")
+        return [dict(row) for row in c.fetchall()]
+
+
+def get_admin_user_by_username(username: str) -> Optional[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT au.*, ar.name as role_name
+            FROM admin_users au
+            JOIN admin_roles ar ON ar.id = au.role_id
+            WHERE au.username = ?
+        """,
+            (username,),
+        )
+        return _row(c.fetchone())
+
+
+def get_admin_user_by_id(admin_id: int) -> Optional[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT au.*, ar.name as role_name
+            FROM admin_users au
+            JOIN admin_roles ar ON ar.id = au.role_id
+            WHERE au.id = ?
+        """,
+            (admin_id,),
+        )
+        return _row(c.fetchone())
+
+
+def list_admin_users() -> List[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT au.*, ar.name as role_name
+            FROM admin_users au
+            JOIN admin_roles ar ON ar.id = au.role_id
+            ORDER BY au.id DESC
+        """
+        )
+        return [dict(row) for row in c.fetchall()]
+
+
+def get_role_permissions(role_id: int) -> List[str]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT ap.code
+            FROM admin_role_permissions arp
+            JOIN admin_permissions ap ON ap.id = arp.permission_id
+            WHERE arp.role_id = ?
+            ORDER BY ap.code
+        """,
+            (role_id,),
+        )
+        return [row["code"] for row in c.fetchall()]
+
+
+def create_admin_user(username: str, password_hash: str, role_id: int) -> int:
+    now = utc_now_iso()
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            INSERT INTO admin_users (username, password_hash, role_id, is_active, created_at)
+            VALUES (?, ?, ?, 1, ?)
+        """,
+            (username, password_hash, role_id, now),
+        )
+        c = conn.cursor()
+        c.execute("SELECT last_insert_rowid()")
+        (new_id,) = c.fetchone()
+        return int(new_id)
+
+
+def set_admin_user_active(admin_id: int, is_active: bool) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            "UPDATE admin_users SET is_active = ? WHERE id = ?",
+            (1 if is_active else 0, admin_id),
+        )
+
+
+def set_admin_user_role(admin_id: int, role_id: int) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            "UPDATE admin_users SET role_id = ? WHERE id = ?",
+            (role_id, admin_id),
+        )
+
+
+def update_admin_last_login(admin_id: int) -> None:
+    now = utc_now_iso()
+    with closing(get_conn()) as conn, conn:
+        conn.execute("UPDATE admin_users SET last_login_at = ? WHERE id = ?", (now, admin_id))
+
+
+def log_admin_action(
+    actor_id: Optional[int],
+    action: str,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> None:
+    now = utc_now_iso()
+    meta_json = json.dumps(meta or {}, ensure_ascii=False)
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            INSERT INTO admin_audit_log (
+                actor_id, action, entity_type, entity_id, meta_json, ip_address, user_agent, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (actor_id, action, entity_type, entity_id, meta_json, ip_address, user_agent, now),
+        )
+
+
+def list_audit_log(limit: int = 100, offset: int = 0) -> List[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT al.*, au.username as actor_username
+            FROM admin_audit_log al
+            LEFT JOIN admin_users au ON au.id = al.actor_id
+            ORDER BY al.id DESC
+            LIMIT ? OFFSET ?
+        """,
+            (limit, offset),
+        )
+        return [dict(row) for row in c.fetchall()]
+
+
+def list_companies_admin(search: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        query = "SELECT * FROM companies"
+        params: List[Any] = []
+        if search:
+            query += " WHERE name LIKE ? OR public_id LIKE ?"
+            params.extend([f"%{search}%", f"%{search}%"])
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        c.execute(query, params)
+        return [dict(row) for row in c.fetchall()]
+
+
+def list_masters_admin(search: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        query = "SELECT * FROM masters"
+        params: List[Any] = []
+        if search:
+            query += " WHERE full_name LIKE ? OR public_id LIKE ?"
+            params.extend([f"%{search}%", f"%{search}%"])
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        c.execute(query, params)
+        return _decrypt_passport_in_list([dict(row) for row in c.fetchall()])
+
+
+def list_review_appeals_admin(status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        query = """
+            SELECT ra.*, r.text as review_text,
+                   m.full_name as master_full_name, m.public_id as master_public_id,
+                   c2.name as company_name, c2.public_id as company_public_id
+            FROM review_appeals ra
+            JOIN reviews r ON ra.review_id = r.id
+            JOIN masters m ON ra.master_id = m.id
+            LEFT JOIN companies c2 ON ra.company_id = c2.id
+        """
+        params: List[Any] = []
+        if status:
+            query += " WHERE ra.status = ?"
+            params.append(status)
+        query += " ORDER BY ra.id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        c.execute(query, params)
+        return [dict(row) for row in c.fetchall()]
+
+
+def update_company_blocked(company_id: int, blocked: bool) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            "UPDATE companies SET blocked = ? WHERE id = ?",
+            (1 if blocked else 0, company_id),
+        )
+
+
+def update_master_blocked(master_id: int, blocked: bool) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            "UPDATE masters SET blocked = ? WHERE id = ?",
+            (1 if blocked else 0, master_id),
+        )
+
+
+def update_master_notes(master_id: int, notes: Optional[str]) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute("UPDATE masters SET notes = ? WHERE id = ?", (notes, master_id))
+
+
+def update_master_passport_locked(master_id: int, locked: bool) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            "UPDATE masters SET passport_locked = ? WHERE id = ?",
+            (1 if locked else 0, master_id),
+        )
+
+
+def update_company_subscription(company_id: int, level: Optional[str], until: Optional[str]) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            UPDATE companies SET subscription_level = ?, subscription_until = ?
+            WHERE id = ?
+        """,
+            (level, until, company_id),
+        )
+
+
+def get_admin_dashboard_stats() -> dict:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM companies")
+        (companies_count,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM masters")
+        (masters_count,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM review_appeals WHERE status = 'pending_admin_review'")
+        (pending_appeals,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM admin_users WHERE is_active = 1")
+        (active_admins,) = c.fetchone()
+        return {
+            "companies": companies_count,
+            "masters": masters_count,
+            "pending_appeals": pending_appeals,
+            "active_admins": active_admins,
+        }
