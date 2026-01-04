@@ -42,8 +42,10 @@ def init_db():
                 city TEXT,
                 responsible_phone TEXT,
                 public_id TEXT,
+                created_at TEXT NOT NULL,
                 subscription_until TEXT,
                 subscription_level TEXT,
+                kyc_status TEXT,
                 blocked INTEGER DEFAULT 0
             )
         """
@@ -58,6 +60,7 @@ def init_db():
                 public_id TEXT,
                 phone TEXT,
                 passport TEXT,
+                created_at TEXT NOT NULL,
                 blocked INTEGER DEFAULT 0,
                 notes TEXT,
                 passport_locked INTEGER DEFAULT 0
@@ -90,15 +93,23 @@ def init_db():
             "ALTER TABLE masters ADD COLUMN passport_locked INTEGER DEFAULT 0",
             "ALTER TABLE companies ADD COLUMN subscription_until TEXT",
             "ALTER TABLE companies ADD COLUMN subscription_level TEXT",
+            "ALTER TABLE companies ADD COLUMN created_at TEXT",
+            "ALTER TABLE companies ADD COLUMN kyc_status TEXT",
             "ALTER TABLE companies ADD COLUMN blocked INTEGER DEFAULT 0",
             "ALTER TABLE masters ADD COLUMN blocked INTEGER DEFAULT 0",
             "ALTER TABLE masters ADD COLUMN notes TEXT",
+            "ALTER TABLE masters ADD COLUMN created_at TEXT",
             "ALTER TABLE employments ADD COLUMN leave_requested_at TEXT",
         ):
             try:
                 c.execute(ddl)
             except sqlite3.OperationalError:
                 pass
+
+        now = utc_now_iso()
+        c.execute("UPDATE companies SET created_at = ? WHERE created_at IS NULL", (now,))
+        c.execute("UPDATE masters SET created_at = ? WHERE created_at IS NULL", (now,))
+        c.execute("UPDATE companies SET kyc_status = 'pending' WHERE kyc_status IS NULL")
 
         c.execute(
             """
@@ -281,6 +292,7 @@ DEFAULT_ADMIN_ROLE_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     ),
     "KYCOperator": (
         "admin.view_dashboard",
+        "companies.view",
         "masters.view",
         "masters.manage",
         "kyc.verify",
@@ -474,13 +486,14 @@ def _serialize_master(row) -> Optional[dict]:
 
 def create_company(tg_id: int, name: str, city: Optional[str], responsible_phone: Optional[str]) -> dict:
     public_id = generate_public_id("C")
+    created_at = utc_now_iso()
     with closing(get_conn()) as conn, conn:
         conn.execute(
             """
-            INSERT INTO companies (tg_id, name, city, responsible_phone, public_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO companies (tg_id, name, city, responsible_phone, public_id, created_at, kyc_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-            (tg_id, name, city, responsible_phone, public_id),
+            (tg_id, name, city, responsible_phone, public_id, created_at, "pending"),
         )
         c = conn.cursor()
         c.execute("SELECT * FROM companies WHERE rowid = last_insert_rowid()")
@@ -489,13 +502,14 @@ def create_company(tg_id: int, name: str, city: Optional[str], responsible_phone
 
 def create_master(tg_id: int, full_name: str, phone: Optional[str], passport: Optional[str]) -> dict:
     public_id = generate_public_id("M")
+    created_at = utc_now_iso()
     with closing(get_conn()) as conn, conn:
         conn.execute(
             """
-            INSERT INTO masters (tg_id, full_name, phone, passport, public_id, passport_locked)
-            VALUES (?, ?, ?, ?, ?, 0)
+            INSERT INTO masters (tg_id, full_name, phone, passport, public_id, passport_locked, created_at)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
         """,
-            (tg_id, full_name, phone, encrypt_passport(passport), public_id),
+            (tg_id, full_name, phone, encrypt_passport(passport), public_id, created_at),
         )
         c = conn.cursor()
         c.execute("SELECT * FROM masters WHERE rowid = last_insert_rowid()")
@@ -1390,8 +1404,12 @@ def list_companies_admin(search: Optional[str] = None, limit: int = 100, offset:
         query = "SELECT * FROM companies"
         params: List[Any] = []
         if search:
-            query += " WHERE name LIKE ? OR public_id LIKE ?"
-            params.extend([f"%{search}%", f"%{search}%"])
+            if search.isdigit():
+                query += " WHERE id = ? OR name LIKE ? OR public_id LIKE ?"
+                params.extend([int(search), f"%{search}%", f"%{search}%"])
+            else:
+                query += " WHERE name LIKE ? OR public_id LIKE ?"
+                params.extend([f"%{search}%", f"%{search}%"])
         query += " ORDER BY id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         c.execute(query, params)
@@ -1404,8 +1422,12 @@ def list_masters_admin(search: Optional[str] = None, limit: int = 100, offset: i
         query = "SELECT * FROM masters"
         params: List[Any] = []
         if search:
-            query += " WHERE full_name LIKE ? OR public_id LIKE ?"
-            params.extend([f"%{search}%", f"%{search}%"])
+            if search.isdigit():
+                query += " WHERE id = ? OR full_name LIKE ? OR public_id LIKE ?"
+                params.extend([int(search), f"%{search}%", f"%{search}%"])
+            else:
+                query += " WHERE full_name LIKE ? OR public_id LIKE ?"
+                params.extend([f"%{search}%", f"%{search}%"])
         query += " ORDER BY id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         c.execute(query, params)
@@ -1474,9 +1496,24 @@ def update_company_subscription(company_id: int, level: Optional[str], until: Op
         )
 
 
+def update_company_kyc_status(company_id: int, kyc_status: str) -> None:
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            UPDATE companies SET kyc_status = ?
+            WHERE id = ?
+        """,
+            (kyc_status, company_id),
+        )
+
+
 def get_admin_dashboard_stats() -> dict:
     with closing(get_conn()) as conn:
         c = conn.cursor()
+        now = datetime.utcnow()
+        day_ago = (now - timedelta(days=1)).isoformat(timespec="seconds")
+        week_ago = (now - timedelta(days=7)).isoformat(timespec="seconds")
+        today = now.date().isoformat()
         c.execute("SELECT COUNT(*) FROM companies")
         (companies_count,) = c.fetchone()
         c.execute("SELECT COUNT(*) FROM masters")
@@ -1485,9 +1522,111 @@ def get_admin_dashboard_stats() -> dict:
         (pending_appeals,) = c.fetchone()
         c.execute("SELECT COUNT(*) FROM admin_users WHERE is_active = 1")
         (active_admins,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM companies WHERE created_at >= ?", (day_ago,))
+        (companies_day,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM companies WHERE created_at >= ?", (week_ago,))
+        (companies_week,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM masters WHERE created_at >= ?", (day_ago,))
+        (masters_day,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM masters WHERE created_at >= ?", (week_ago,))
+        (masters_week,) = c.fetchone()
+        c.execute(
+            """
+            SELECT COUNT(*)
+            FROM employments
+            WHERE status IN ('pending_company_confirm', 'accepted', 'leave_requested')
+        """
+        )
+        (collab_in_process,) = c.fetchone()
+        c.execute("SELECT COUNT(*) FROM employments WHERE status = 'ended'")
+        (collab_completed,) = c.fetchone()
+        c.execute(
+            """
+            SELECT
+                SUM(CASE WHEN rating <= 2 THEN 1 ELSE 0 END) as high,
+                SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) as medium,
+                SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END) as low
+            FROM reviews
+            WHERE rating IS NOT NULL AND created_at >= ?
+        """,
+            (week_ago,),
+        )
+        signals_row = c.fetchone()
+        employer_signals = {
+            "high": signals_row["high"] or 0,
+            "medium": signals_row["medium"] or 0,
+            "low": signals_row["low"] or 0,
+        }
+        c.execute(
+            """
+            SELECT created_at
+            FROM review_appeals
+            WHERE status = 'pending_admin_review'
+        """
+        )
+        overdue_cutoff = now - timedelta(hours=48)
+        overdue_appeals = 0
+        for row in c.fetchall():
+            created_at = row["created_at"]
+            if not created_at:
+                continue
+            try:
+                created_at_dt = datetime.fromisoformat(created_at)
+            except ValueError:
+                continue
+            if created_at_dt <= overdue_cutoff:
+                overdue_appeals += 1
+        c.execute(
+            """
+            SELECT COUNT(*)
+            FROM companies
+            WHERE subscription_until IS NOT NULL
+              AND subscription_until != ''
+              AND subscription_until >= ?
+        """,
+            (today,),
+        )
+        (active_subscriptions,) = c.fetchone()
+        c.execute(
+            """
+            SELECT COUNT(*)
+            FROM companies
+            WHERE subscription_until IS NOT NULL
+              AND subscription_until != ''
+              AND subscription_until < ?
+        """,
+            (today,),
+        )
+        (overdue_subscriptions,) = c.fetchone()
         return {
             "companies": companies_count,
             "masters": masters_count,
             "pending_appeals": pending_appeals,
             "active_admins": active_admins,
+            "new_registrations": {
+                "companies_day": companies_day,
+                "companies_week": companies_week,
+                "masters_day": masters_day,
+                "masters_week": masters_week,
+            },
+            "collaboration_requests": {
+                "in_process": collab_in_process,
+                "completed": collab_completed,
+            },
+            "employer_signals": employer_signals,
+            "appeals": {
+                "open": pending_appeals,
+                "overdue": overdue_appeals,
+                "sla_hours": 48,
+            },
+            "suspicious_activity": {
+                "multiple_accounts": 0,
+                "anomalous_checks": 0,
+                "negative_spike": 0,
+            },
+            "payments": {
+                "active_subscriptions": active_subscriptions,
+                "overdue_subscriptions": overdue_subscriptions,
+                "mrr": None,
+            },
         }

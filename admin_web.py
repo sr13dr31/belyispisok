@@ -143,8 +143,20 @@ def create_app() -> Flask:
     @permission_required("companies.manage")
     def admin_companies_block(company_id: int):
         blocked = request.form.get("blocked") == "1"
+        reason = request.form.get("reason") or None
         db.update_company_blocked(company_id, blocked)
-        audit("company_block", "company", str(company_id), {"blocked": blocked})
+        audit("company_block", "company", str(company_id), {"blocked": blocked, "reason": reason})
+        return redirect(url_for("admin_companies"))
+
+    @app.post("/admin/companies/<int:company_id>/kyc")
+    @permission_required("kyc.verify")
+    def admin_companies_kyc(company_id: int):
+        kyc_status = request.form.get("kyc_status")
+        allowed = {"pending", "verified", "rejected"}
+        if kyc_status not in allowed:
+            abort(400)
+        db.update_company_kyc_status(company_id, kyc_status)
+        audit("company_kyc_status", "company", str(company_id), {"kyc_status": kyc_status})
         return redirect(url_for("admin_companies"))
 
     @app.post("/admin/companies/<int:company_id>/subscription")
@@ -167,6 +179,42 @@ def create_app() -> Flask:
         search = request.args.get("search", "").strip() or None
         masters = db.list_masters_admin(search=search)
         return render_template("admin/masters.html", masters=masters, search=search)
+
+    @app.post("/admin/find-id")
+    @permission_required("admin.view_dashboard")
+    def admin_find_id():
+        entity_type = request.form.get("entity_type")
+        query = request.form.get("query", "").strip()
+        if not query:
+            flash("Введите ID или название для поиска.", "error")
+            return redirect(url_for("admin_dashboard"))
+        if entity_type == "company":
+            if "companies.view" not in g.permissions:
+                abort(403)
+            audit("quick_find_company", "company", None, {"query": query})
+            return redirect(url_for("admin_companies", search=query))
+        if entity_type == "master":
+            if "masters.view" not in g.permissions:
+                abort(403)
+            audit("quick_find_master", "master", None, {"query": query})
+            return redirect(url_for("admin_masters", search=query))
+        abort(400)
+
+    @app.post("/admin/companies/block")
+    @permission_required("companies.manage")
+    def admin_companies_block_quick():
+        try:
+            company_id = int(request.form.get("company_id", "0"))
+        except ValueError:
+            company_id = 0
+        reason = request.form.get("reason") or None
+        if not company_id:
+            flash("Укажите ID компании для блокировки.", "error")
+            return redirect(url_for("admin_dashboard"))
+        db.update_company_blocked(company_id, True)
+        audit("company_block", "company", str(company_id), {"blocked": True, "reason": reason})
+        flash("Компания заблокирована.", "success")
+        return redirect(url_for("admin_companies", search=str(company_id)))
 
     @app.post("/admin/masters/<int:master_id>/block")
     @permission_required("masters.manage")

@@ -2,13 +2,123 @@
 {% block title %}Админ панель{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Сводка</h2>
-  <table>
-    <tr><th>Компании</th><td>{{ stats.companies }}</td></tr>
-    <tr><th>Исполнители</th><td>{{ stats.masters }}</td></tr>
-    <tr><th>Апелляции на рассмотрении</th><td>{{ stats.pending_appeals }}</td></tr>
-    <tr><th>Активные админы</th><td>{{ stats.active_admins }}</td></tr>
-  </table>
+  <h2>Температура системы</h2>
+  <div class="grid two">
+    <div class="card">
+      <h3>Общая сводка</h3>
+      <ul class="metric-list">
+        <li><span>Компании</span><strong>{{ stats.companies }}</strong></li>
+        <li><span>Исполнители</span><strong>{{ stats.masters }}</strong></li>
+        <li><span>Апелляции на рассмотрении</span><strong>{{ stats.pending_appeals }}</strong></li>
+        <li><span>Активные админы</span><strong>{{ stats.active_admins }}</strong></li>
+      </ul>
+      <div class="muted">Доступ: все роли с доступом к главной панели.</div>
+    </div>
+    <div class="card">
+      <h3>Новые регистрации</h3>
+      <ul class="metric-list">
+        <li><span>Компании (сутки)</span><strong>{{ stats.new_registrations.companies_day }}</strong></li>
+        <li><span>Компании (неделя)</span><strong>{{ stats.new_registrations.companies_week }}</strong></li>
+        <li><span>Исполнители (сутки)</span><strong>{{ stats.new_registrations.masters_day }}</strong></li>
+        <li><span>Исполнители (неделя)</span><strong>{{ stats.new_registrations.masters_week }}</strong></li>
+      </ul>
+      <div class="muted">Доступ: admin.view_dashboard.</div>
+    </div>
+    {% if 'companies.view' in g.permissions or 'masters.view' in g.permissions %}
+    <div class="card">
+      <h3>Запросы сотрудничества</h3>
+      <ul class="metric-list">
+        <li><span>В процессе</span><strong>{{ stats.collaboration_requests.in_process }}</strong></li>
+        <li><span>Завершены</span><strong>{{ stats.collaboration_requests.completed }}</strong></li>
+      </ul>
+      <div class="muted">Доступ: companies.view или masters.view.</div>
+    </div>
+    {% endif %}
+    {% if 'analytics.view' in g.permissions %}
+    <div class="card">
+      <h3>Новые сигналы работодателей (неделя)</h3>
+      <ul class="metric-list">
+        <li><span>Высокая тяжесть</span><strong>{{ stats.employer_signals.high }}</strong></li>
+        <li><span>Средняя тяжесть</span><strong>{{ stats.employer_signals.medium }}</strong></li>
+        <li><span>Низкая тяжесть</span><strong>{{ stats.employer_signals.low }}</strong></li>
+      </ul>
+      <div class="muted">Доступ: analytics.view.</div>
+    </div>
+    {% endif %}
+    {% if 'appeals.view' in g.permissions %}
+    <div class="card">
+      <h3>Открытые споры/апелляции</h3>
+      <ul class="metric-list">
+        <li><span>Всего</span><strong>{{ stats.appeals.open }}</strong></li>
+        <li><span>Просрочены (SLA {{ stats.appeals.sla_hours }}ч)</span><strong>{{ stats.appeals.overdue }}</strong></li>
+      </ul>
+      <div class="muted">Доступ: appeals.view.</div>
+    </div>
+    {% endif %}
+    {% if 'support.view' in g.permissions %}
+    <div class="card">
+      <h3>Подозрительная активность (антифрод)</h3>
+      <ul class="metric-list">
+        <li><span>Множественные аккаунты</span><strong>{{ stats.suspicious_activity.multiple_accounts }}</strong></li>
+        <li><span>Аномальные проверки</span><strong>{{ stats.suspicious_activity.anomalous_checks }}</strong></li>
+        <li><span>Всплеск негативов</span><strong>{{ stats.suspicious_activity.negative_spike }}</strong></li>
+      </ul>
+      <div class="muted">Доступ: support.view.</div>
+    </div>
+    {% endif %}
+    {% if 'finance.view' in g.permissions %}
+    <div class="card">
+      <h3>Платежи</h3>
+      <ul class="metric-list">
+        <li><span>Активные подписки</span><strong>{{ stats.payments.active_subscriptions }}</strong></li>
+        <li><span>Просрочки</span><strong>{{ stats.payments.overdue_subscriptions }}</strong></li>
+        <li><span>MRR</span><strong>{{ stats.payments.mrr or '—' }}</strong></li>
+      </ul>
+      <div class="muted">Доступ: finance.view.</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+<div class="card">
+  <h3>Быстрые действия</h3>
+  <div class="actions stack">
+    {% if 'companies.view' in g.permissions or 'masters.view' in g.permissions %}
+    <form method="post" action="{{ url_for('admin_find_id') }}">
+      <label>
+        Найти ID
+        <select name="entity_type">
+          {% if 'companies.view' in g.permissions %}<option value="company">Компания</option>{% endif %}
+          {% if 'masters.view' in g.permissions %}<option value="master">Исполнитель</option>{% endif %}
+        </select>
+      </label>
+      <input type="text" name="query" placeholder="Название или ID" />
+      <button type="submit">Найти</button>
+    </form>
+    {% endif %}
+    {% if 'appeals.view' in g.permissions %}
+    <div>
+      <a href="{{ url_for('admin_appeals', status='pending_admin_review') }}">Создать кейс спора</a>
+      <div class="muted">Доступ: appeals.view.</div>
+    </div>
+    {% endif %}
+    {% if 'companies.manage' in g.permissions %}
+    <form method="post" action="{{ url_for('admin_companies_block_quick') }}">
+      <label>Блокировать доступ компании</label>
+      <input type="number" name="company_id" placeholder="ID компании" />
+      <input type="text" name="reason" placeholder="Причина блокировки" />
+      <button type="submit">Заблокировать</button>
+    </form>
+    {% endif %}
+    {% if 'kyc.verify' in g.permissions %}
+    <form method="post" action="{{ url_for('admin_find_id') }}">
+      <label>Проверить компанию (KYC статус)</label>
+      <input type="hidden" name="entity_type" value="company" />
+      <input type="text" name="query" placeholder="ID или название компании" />
+      <button type="submit">Открыть</button>
+      <div class="muted">Доступ: kyc.verify.</div>
+    </form>
+    {% endif %}
+  </div>
 </div>
 {% if 'data.export' in g.permissions %}
 <div class="card">
