@@ -209,6 +209,14 @@ def master_appeal_skip_proof_kb():
     return kb.as_markup()
 
 
+def master_appeal_proof_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Готово", callback_data="master_appeal_finish_proof")
+    kb.button(text="Пропустить (без доказательств)", callback_data="master_appeal_skip_proof")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def company_leave_request_actions_kb(employment_id: int):
     kb = InlineKeyboardBuilder()
     kb.button(

@@ -131,8 +131,10 @@ def init_db():
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                master_comment TEXT,
                 company_comment TEXT,
                 company_files_message_id INTEGER,
+                master_files_message_id INTEGER,
                 admin_comment TEXT,
                 reminder_sent_at TEXT,
                 final_decision_at TEXT,
@@ -145,6 +147,7 @@ def init_db():
             "ALTER TABLE review_appeals ADD COLUMN final_decision_at TEXT",
             "ALTER TABLE review_appeals ADD COLUMN attempts_count INTEGER DEFAULT 0",
             "ALTER TABLE review_appeals ADD COLUMN master_files_message_id INTEGER",
+            "ALTER TABLE review_appeals ADD COLUMN master_comment TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -546,24 +549,50 @@ def get_current_employment(master_id: int) -> Optional[dict]:
         return _row(c.fetchone())
 
 
-def auto_close_leave_requests():
+def auto_close_leave_requests() -> List[dict]:
     now = datetime.utcnow()
     threshold = now - timedelta(days=2)
     now_iso = now.isoformat(timespec="seconds")
     threshold_iso = threshold.isoformat(timespec="seconds")
 
     with closing(get_conn()) as conn, conn:
-        conn.execute(
+        c = conn.cursor()
+        c.execute(
             """
-            UPDATE employments
-            SET status = 'ended', ended_at = ?
-            WHERE status = 'leave_requested'
-              AND leave_requested_at IS NOT NULL
-              AND leave_requested_at <= ?
-              AND (ended_at IS NULL OR ended_at = '')
+            SELECT e.id,
+                   e.master_id,
+                   e.company_id,
+                   e.position,
+                   e.leave_requested_at,
+                   m.tg_id AS master_tg_id,
+                   m.full_name AS master_full_name,
+                   m.public_id AS master_public_id,
+                   c.tg_id AS company_tg_id,
+                   c.name AS company_name,
+                   c.public_id AS company_public_id
+            FROM employments e
+            JOIN masters m ON e.master_id = m.id
+            JOIN companies c ON e.company_id = c.id
+            WHERE e.status = 'leave_requested'
+              AND e.leave_requested_at IS NOT NULL
+              AND e.leave_requested_at <= ?
+              AND (e.ended_at IS NULL OR e.ended_at = '')
             """,
-            (now_iso, threshold_iso),
+            (threshold_iso,),
         )
+        rows = [dict(row) for row in c.fetchall()]
+        if rows:
+            ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                f"""
+                UPDATE employments
+                SET status = 'ended', ended_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                (now_iso, *ids),
+            )
+        return rows
 
 
 def has_any_current_employment(master_id: int) -> bool:
