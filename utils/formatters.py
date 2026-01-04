@@ -103,6 +103,32 @@ def format_master_profile(master: dict, rating: Optional[dict] = None) -> str:
     return "\n".join(lines)
 
 
+def format_master_admin_profile(master: dict, rating: Optional[dict] = None) -> str:
+    lines = ["Профиль исполнителя:"]
+    lines.append(f"👤 ФИО: {master['full_name']}")
+    lines.append(f"ID: {master['public_id']}")
+    rating = rating or {}
+    emoji, risk_text = _get_risk_label(rating.get("avg_rating"), rating.get("ratings_count", 0))
+    if rating.get("ratings_count"):
+        lines.append(f"Рейтинг: {rating['avg_rating']} ({rating['ratings_count']} отзывов)")
+    lines.append(f"Фактор риска: {emoji} {risk_text}")
+    if master.get("phone"):
+        lines.append(f"Телефон: {master['phone']}")
+    if master.get("passport"):
+        passport = master["passport"]
+        masked = "***" + passport[-4:] if len(passport) > 4 else "***"
+        locked = bool(master.get("passport_locked"))
+        status = "подтверждён компанией" if locked else "ещё не подтверждён компанией"
+        lines.append(
+            f"Паспорт: {masked} ({status}, полностью хранится в системе, но не показывается целиком)"
+        )
+    if master.get("blocked"):
+        lines.append("Статус: 🚫 профиль заблокирован администратором")
+    else:
+        lines.append("Статус: ✅ профиль активен")
+    return "\n".join(lines)
+
+
 def format_company_profile(company: dict) -> str:
     lines = ["Профиль компании:"]
 
@@ -170,4 +196,3 @@ def format_employment_reviews(employment: dict, reviews: List[dict]) -> str:
         lines.append("")
 
     return "\n".join(lines).strip()
-
