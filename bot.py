@@ -128,7 +128,7 @@ from keyboards import (
     viewer_menu_kb,
     master_leave_request_kb,
     master_open_review_kb,
-    master_appeal_skip_proof_kb,
+    master_appeal_proof_kb,
 )
 # Настройка логирования
 try:
@@ -192,6 +192,101 @@ def ensure_company_can_act(company: dict, require_subscription: bool = True) -> 
             "Оформите или продлите подписку через пункт «Подписка и оплата» в меню."
         )
     return None
+
+
+async def submit_master_appeal(
+    *,
+    reply_message: Message,
+    tg_id: int,
+    review_id: int,
+    reason: str,
+    master: dict,
+    review: dict,
+    photo_message_ids: Optional[list[int]] = None,
+    photo_chat_id: Optional[int] = None,
+):
+    appeal_id = create_review_appeal(
+        review_id=review_id,
+        master_id=master["id"],
+        company_id=review["company_id"],
+        reason=reason,
+    )
+
+    if photo_message_ids and photo_chat_id:
+        with closing(get_conn()) as conn, conn:
+            conn.execute(
+                "UPDATE review_appeals SET master_files_message_id = ? WHERE id = ?",
+                (photo_message_ids[0], appeal_id),
+            )
+
+    pop_state(tg_id)
+    await reply_message.answer(
+        "Ваша жалоба отправлена компании и администратору.\n"
+        "Компания должна предоставить ответ и доказательства. "
+        "Если она этого не сделает, отзыв может быть удалён.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+    company = get_company_by_id(review["company_id"])
+    if company:
+        text = (
+            f"Исполнитель {master['full_name']} ({master['public_id']}) "
+            f"подал жалобу на отзыв #{review_id}.\n\n"
+            f"Текст жалобы:\n{reason}\n\n"
+            "Зайдите в раздел «Жалобы на отзывы» в меню компании, чтобы ответить."
+        )
+        try:
+            await bot.send_message(
+                company["tg_id"],
+                text,
+                reply_markup=company_appeal_actions_kb(appeal_id),
+            )
+            if photo_message_ids and photo_chat_id:
+                for message_id in photo_message_ids:
+                    try:
+                        await bot.copy_message(
+                            company["tg_id"],
+                            from_chat_id=photo_chat_id,
+                            message_id=message_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Не удалось переслать фото компании по жалобе %s",
+                            appeal_id,
+                        )
+        except Exception:
+            logger.exception("Не удалось уведомить компанию %s о жалобе", company["id"])
+
+    for admin_id in config.ADMIN_IDS:
+        try:
+            admin_text = (
+                f"Новая жалоба #{appeal_id} на отзыв:\n\n"
+                f"Исполнитель: {master['full_name']} ({master['public_id']})\n"
+                f"Компания: {company['name'] if company else 'не найдена'}\n\n"
+                f"Текст отзыва:\n{review['text']}\n\n"
+                f"Жалоба исполнителя:\n{reason}"
+            )
+            await bot.send_message(
+                admin_id,
+                admin_text,
+                reply_markup=admin_appeal_actions_kb(appeal_id),
+            )
+            if photo_message_ids and photo_chat_id:
+                for message_id in photo_message_ids:
+                    try:
+                        await bot.copy_message(
+                            admin_id,
+                            from_chat_id=photo_chat_id,
+                            message_id=message_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Не удалось переслать фото админу %s по жалобе %s",
+                            admin_id,
+                            appeal_id,
+                        )
+        except Exception:
+            logger.exception("Не удалось уведомить админа %s о жалобе %s", admin_id, appeal_id)
 
 
 def auto_review_appeals_maintenance():
@@ -528,57 +623,56 @@ async def cb_master_appeal_skip_proof(callback: CallbackQuery):
         pop_state(tg_id)
         return
 
-    # Создаём жалобу без фото
-    appeal_id = create_review_appeal(
+    await submit_master_appeal(
+        reply_message=callback.message,
+        tg_id=tg_id,
         review_id=review_id,
-        master_id=master["id"],
-        company_id=review["company_id"],
         reason=reason,
+        master=master,
+        review=review,
     )
-    
-    pop_state(tg_id)
-    await callback.message.answer(
-        "Ваша жалоба отправлена компании и администратору.\n"
-        "Компания должна предоставить ответ и доказательства. "
-        "Если она этого не сделает, отзыв может быть удалён.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    
-    # Уведомляем компанию
-    company = get_company_by_id(review["company_id"])
-    if company:
-        text = (
-            f"Исполнитель {master['full_name']} ({master['public_id']}) "
-            f"подал жалобу на отзыв #{review_id}.\n\n"
-            f"Текст жалобы:\n{reason}\n\n"
-            "Зайдите в раздел «Жалобы на отзывы» в меню компании, чтобы ответить."
+
+
+@dp.callback_query(F.data == "master_appeal_finish_proof")
+async def cb_master_appeal_finish_proof(callback: CallbackQuery):
+    await callback.answer()
+    tg_id = callback.from_user.id
+    state = get_state(tg_id)
+
+    if not state or state.action != "master_appeal_proof":
+        await callback.message.answer("Ошибка: состояние не найдено. Попробуйте начать заново.")
+        return
+
+    review_id = state.data["review_id"]
+    reason = state.data["reason"]
+    photo_message_ids = state.data.get("photo_message_ids") or []
+    photo_chat_id = state.data.get("photo_chat_id")
+
+    if not photo_message_ids:
+        await callback.message.answer(
+            "Вы ещё не отправили фото. Отправьте фото или нажмите «Пропустить».",
+            reply_markup=master_appeal_proof_kb(),
         )
-        try:
-            await bot.send_message(
-                company["tg_id"],
-                text,
-                reply_markup=company_appeal_actions_kb(appeal_id),
-            )
-        except Exception:
-            logger.exception("Не удалось уведомить компанию %s о жалобе", company["id"])
-    
-    # Уведомляем админов
-    for admin_id in config.ADMIN_IDS:
-        try:
-            admin_text = (
-                f"Новая жалоба #{appeal_id} на отзыв:\n\n"
-                f"Исполнитель: {master['full_name']} ({master['public_id']})\n"
-                f"Компания: {company['name'] if company else 'не найдена'}\n\n"
-                f"Текст отзыва:\n{review['text']}\n\n"
-                f"Жалоба исполнителя:\n{reason}"
-            )
-            await bot.send_message(
-                admin_id,
-                admin_text,
-                reply_markup=admin_appeal_actions_kb(appeal_id),
-            )
-        except Exception:
-            logger.exception("Не удалось уведомить админа %s о жалобе %s", admin_id, appeal_id)
+        return
+
+    master = get_master_by_user(tg_id)
+    review = get_review_by_id(review_id)
+
+    if not master or not review:
+        await callback.message.answer("Не удалось найти данные по отзыву. Попробуйте позже.")
+        pop_state(tg_id)
+        return
+
+    await submit_master_appeal(
+        reply_message=callback.message,
+        tg_id=tg_id,
+        review_id=review_id,
+        reason=reason,
+        master=master,
+        review=review,
+        photo_message_ids=photo_message_ids,
+        photo_chat_id=photo_chat_id,
+    )
 
 
 @dp.callback_query(F.data.startswith("master_appeal_"))
@@ -2112,6 +2206,41 @@ async def generic_message_handler(message: Message):
         )
         return
 
+    # === Компания редактирует название ===
+    if action == "company_edit_name":
+        new_name = message.text.strip()
+        if new_name != "-":
+            is_valid, error_msg = validate_company_name(new_name)
+            if not is_valid:
+                await message.answer(f"❌ {error_msg}\n\nПопробуйте ещё раз:")
+                return
+
+        company_id = state.data["company_id"]
+        company = get_company_by_user(tg_id)
+        if not company or company["id"] != company_id:
+            await message.answer("Ошибка контекста компании. Попробуйте начать заново.")
+            pop_state(tg_id)
+            return
+
+        final_name = state.data["name"] if new_name == "-" else new_name
+        with closing(get_conn()) as conn, conn:
+            conn.execute(
+                "UPDATE companies SET name = ? WHERE id = ?",
+                (final_name, company_id),
+            )
+
+        pop_state(tg_id)
+        updated_company = get_company_by_id(company_id)
+        await message.answer(
+            "Название компании обновлено.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await message.answer(
+            format_company_profile(updated_company),
+            reply_markup=company_menu_kb(company_id),
+        )
+        return
+
     # === Регистрация обычного пользователя (телефон) ===
     if action == "viewer_enter_phone":
         phone = message.text.strip()
@@ -2375,13 +2504,14 @@ async def generic_message_handler(message: Message):
             "master_appeal_proof",
             review_id=review_id,
             reason=reason,
+            photo_message_ids=[],
         )
         
         await message.answer(
             "Описание сохранено.\n\n"
             "Теперь вы можете приложить до 5 фото в качестве доказательств "
-            "(или нажмите «Пропустить», если доказательств нет).",
-            reply_markup=master_appeal_skip_proof_kb(),
+            "(можно отправлять по одному) или нажмите «Пропустить», если доказательств нет.",
+            reply_markup=master_appeal_proof_kb(),
         )
         return
 
@@ -2403,7 +2533,7 @@ async def generic_message_handler(message: Message):
             await message.answer(
                 "На этом этапе нужно отправить фото (до 5 штук) в качестве доказательств "
                 "или нажмите кнопку «Пропустить», если доказательств нет.",
-                reply_markup=master_appeal_skip_proof_kb(),
+                reply_markup=master_appeal_proof_kb(),
             )
             return
 
@@ -2411,17 +2541,17 @@ async def generic_message_handler(message: Message):
         if message.video or message.video_note:
             await message.answer(
                 "❌ Видео не поддерживаются. Пожалуйста, отправьте только фото (до 5 штук) или нажмите «Пропустить».",
-                reply_markup=master_appeal_skip_proof_kb(),
+                reply_markup=master_appeal_proof_kb(),
             )
             return
         
         # Проверка количества фото
         if message.photo:
-            photo_count = len(message.photo) if isinstance(message.photo, list) else 1
-            if photo_count > 5:
+            photo_message_ids = state.data.get("photo_message_ids") or []
+            if len(photo_message_ids) >= 5:
                 await message.answer(
-                    "❌ Можно отправить максимум 5 фото. Пожалуйста, отправьте меньше фото.",
-                    reply_markup=master_appeal_skip_proof_kb(),
+                    "❌ Можно отправить максимум 5 фото. Нажмите «Готово» или «Пропустить».",
+                    reply_markup=master_appeal_proof_kb(),
                 )
                 return
         else:
@@ -2429,91 +2559,38 @@ async def generic_message_handler(message: Message):
             await message.answer(
                 "Пожалуйста, отправьте фото (до 5 штук) в качестве доказательств "
                 "или нажмите кнопку «Пропустить», если доказательств нет.",
-                reply_markup=master_appeal_skip_proof_kb(),
+                reply_markup=master_appeal_proof_kb(),
             )
             return
 
-        # Создаём жалобу
-        appeal_id = create_review_appeal(
-            review_id=review_id,
-            master_id=master["id"],
-            company_id=review["company_id"],
-            reason=reason,
-        )
-        
-        # Сохраняем ID сообщения с фото, если есть
-        if message.photo:
-            files_message_id = message.message_id
-            with closing(get_conn()) as conn, conn:
-                conn.execute(
-                    "UPDATE review_appeals SET master_files_message_id = ? WHERE id = ?",
-                    (files_message_id, appeal_id),
-                )
-        
-        pop_state(tg_id)
-        await message.answer(
-            "Ваша жалоба отправлена компании и администратору.\n"
-            "Компания должна предоставить ответ и доказательства. "
-            "Если она этого не сделает, отзыв может быть удалён.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        
-        # Уведомляем компанию
-        company = get_company_by_id(review["company_id"])
-        if company:
-            text = (
-                f"Исполнитель {master['full_name']} ({master['public_id']}) "
-                f"подал жалобу на отзыв #{review_id}.\n\n"
-                f"Текст жалобы:\n{reason}\n\n"
-                "Зайдите в раздел «Жалобы на отзывы» в меню компании, чтобы ответить."
+        photo_message_ids = state.data.get("photo_message_ids") or []
+        photo_message_ids.append(message.message_id)
+
+        if len(photo_message_ids) < 5:
+            set_state(
+                tg_id,
+                "master_appeal_proof",
+                review_id=review_id,
+                reason=reason,
+                photo_message_ids=photo_message_ids,
+                photo_chat_id=message.chat.id,
             )
-            try:
-                await bot.send_message(
-                    company["tg_id"],
-                    text,
-                    reply_markup=company_appeal_actions_kb(appeal_id),
-                )
-                # Если есть фото, пересылаем их компании
-                if message.photo:
-                    try:
-                        await bot.copy_message(
-                            company["tg_id"],
-                            from_chat_id=message.chat.id,
-                            message_id=message.message_id,
-                        )
-                    except Exception:
-                        logger.exception("Не удалось переслать фото компании по жалобе %s", appeal_id)
-            except Exception:
-                logger.exception("Не удалось уведомить компанию %s о жалобе", company["id"])
-        
-        # Уведомляем админов
-        for admin_id in config.ADMIN_IDS:
-            try:
-                admin_text = (
-                    f"Новая жалоба #{appeal_id} на отзыв:\n\n"
-                    f"Исполнитель: {master['full_name']} ({master['public_id']})\n"
-                    f"Компания: {company['name'] if company else 'не найдена'}\n\n"
-                    f"Текст отзыва:\n{review['text']}\n\n"
-                    f"Жалоба исполнителя:\n{reason}"
-                )
-                await bot.send_message(
-                    admin_id,
-                    admin_text,
-                    reply_markup=admin_appeal_actions_kb(appeal_id),
-                )
-                # Если есть фото, пересылаем админу
-                if message.photo:
-                    try:
-                        await bot.copy_message(
-                            admin_id,
-                            from_chat_id=message.chat.id,
-                            message_id=message.message_id,
-                        )
-                    except Exception:
-                        logger.exception("Не удалось переслать фото админу %s по жалобе %s", admin_id, appeal_id)
-            except Exception:
-                logger.exception("Не удалось уведомить админа %s о жалобе %s", admin_id, appeal_id)
-        
+            await message.answer(
+                "Фото получено. Можете отправить ещё или нажмите «Готово».",
+                reply_markup=master_appeal_proof_kb(),
+            )
+            return
+
+        await submit_master_appeal(
+            reply_message=message,
+            tg_id=tg_id,
+            review_id=review_id,
+            reason=reason,
+            master=master,
+            review=review,
+            photo_message_ids=photo_message_ids,
+            photo_chat_id=message.chat.id,
+        )
         return
 
     # === Компания отвечает на жалобу, присылая комментарий и файлы ===
@@ -2809,7 +2886,38 @@ async def maintenance_worker():
     """Фоновая задача: регулярно выполняет обслуживание базы (увольнения, жалобы, очистка состояний)."""
     while True:
         try:
-            auto_close_leave_requests()
+            closed_employments = auto_close_leave_requests()
+            for employment in closed_employments:
+                try:
+                    await bot.send_message(
+                        employment["master_tg_id"],
+                        (
+                            "Система автоматически завершила сотрудничество по вашему запросу "
+                            "на увольнение, так как компания не ответила в течение 2 дней.\n\n"
+                            f"Компания: {employment['company_name']} ({employment['company_public_id']})"
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Не удалось уведомить мастера %s об авто-увольнении",
+                        employment["master_id"],
+                    )
+
+                try:
+                    await bot.send_message(
+                        employment["company_tg_id"],
+                        (
+                            "Система автоматически завершила сотрудничество по запросу на увольнение, "
+                            "так как вы не ответили в течение 2 дней.\n\n"
+                            f"Исполнитель: {employment['master_full_name']} "
+                            f"({employment['master_public_id']})"
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Не удалось уведомить компанию %s об авто-увольнении",
+                        employment["company_id"],
+                    )
             auto_review_appeals_maintenance()
             clear_expired_states(max_age_hours=24)  # Очистка состояний старше 24 часов
         except Exception:
