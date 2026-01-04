@@ -24,10 +24,14 @@ except RuntimeError as e:
     print()
     print("Создайте файл .env в корне проекта со следующим содержимым:")
     print("  BOT_TOKEN=your_telegram_bot_token")
+    print("  PASSPORT_SECRET=your_passport_secret")
     print("  ADMINS=your_telegram_id")
     print("  PAYMENT_CARD=0000 0000 0000 0000")
     print("  DB_PATH=bot.db")
     print("  LOG_LEVEL=INFO")
+    print()
+    print("Важно: PASSPORT_SECRET обязателен. Если раньше паспорта шифровались через BOT_TOKEN,")
+    print("необходимо выполнить миграцию данных после установки PASSPORT_SECRET.")
     print()
     input("Нажмите Enter для выхода...")
     exit(1)
@@ -107,6 +111,7 @@ from keyboards import (
     admin_main_kb,
     admin_master_detail_kb,
     admin_masters_list_kb,
+    admin_subscription_plans_kb,
     appeal_button_kb,
     company_appeal_actions_kb,
     company_appeals_kb,
@@ -1758,13 +1763,68 @@ async def cb_admin_give_sub(callback: CallbackQuery):
         return
 
     await callback.message.answer(
-        "Введите срок подписки в месяцах (числом, например 1, 3, 6, 12):",
+        "Введите срок подписки в месяцах (числом, например 1, 3, 6, 12).\n"
+        "Чтобы снять подписку, отправьте 0.",
         reply_markup=back_kb(),
     )
     set_state(
         callback.from_user.id,
         "admin_give_sub_months",
         company_id=company_id,
+    )
+
+
+@dp.callback_query(F.data.startswith("admin_manage_sub_"))
+async def cb_admin_manage_sub(callback: CallbackQuery):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        return
+
+    try:
+        company_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        await callback.message.answer("Некорректные данные.")
+        return
+
+    company = get_company_by_id(company_id)
+    if not company:
+        await callback.message.answer("Компания не найдена.")
+        return
+
+    await callback.message.answer(
+        "Выберите вариант управления подпиской:",
+        reply_markup=admin_subscription_plans_kb(company_id),
+    )
+
+
+@dp.callback_query(F.data.startswith("admin_set_sub_"))
+async def cb_admin_set_sub(callback: CallbackQuery):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        return
+
+    data = callback.data.split("_")
+    if len(data) < 5:
+        await callback.message.answer("Некорректные данные.")
+        return
+
+    try:
+        company_id = int(data[3])
+        months = int(data[4])
+    except (ValueError, IndexError):
+        await callback.message.answer("Некорректные данные.")
+        return
+
+    set_company_subscription(company_id, months)
+    company = get_company_by_id(company_id)
+    if not company:
+        await callback.message.answer("Компания не найдена.")
+        return
+
+    if months <= 0:
+        message = "Подписка снята."
+    else:
+        message = f"Подписка продлена на {months} мес."
+    await callback.message.answer(
+        f"{message}\n\n{format_company_profile(company)}"
     )
 
 
@@ -2639,11 +2699,11 @@ async def generic_message_handler(message: Message):
                         message_id=files_message_id or message.message_id,
                     )
                 except Exception:
-                        logger.exception(
-                            "Не удалось переслать материалы по жалобе %s админу %s",
-                            appeal_id,
-                            admin_id,
-                        )
+                    logger.exception(
+                        "Не удалось переслать материалы по жалобе %s админу %s",
+                        appeal_id,
+                        admin_id,
+                    )
             except Exception:
                 logger.exception("Ошибка при уведомлении админов о жалобе %s", appeal_id)
 
@@ -2659,14 +2719,27 @@ async def generic_message_handler(message: Message):
         try:
             months = int(message.text.strip())
         except ValueError:
-            await message.answer("Введите число месяцев (например, 1, 3, 6, 12).")
+            await message.answer("Введите число месяцев (например, 1, 3, 6, 12) или 0.")
+            return
+
+        if months < 0:
+            await message.answer("Срок не может быть отрицательным. Введите 0 или число месяцев.")
             return
 
         company_id = state.data["company_id"]
         set_company_subscription(company_id, months)
         pop_state(tg_id)
+        company = get_company_by_id(company_id)
+        message_lines = []
+        if months == 0:
+            message_lines.append(f"Подписка снята у компании с ID {company_id}.")
+        else:
+            message_lines.append(f"Подписка на {months} мес. выдана компании с ID {company_id}.")
+        if company:
+            message_lines.append("")
+            message_lines.append(format_company_profile(company))
         await message.answer(
-            f"Подписка на {months} мес. выдана компании с ID {company_id}.",
+            "\n".join(message_lines),
             reply_markup=ReplyKeyboardRemove(),
         )
         return

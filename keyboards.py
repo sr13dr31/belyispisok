@@ -260,7 +260,7 @@ def admin_company_detail_kb(company_id: int, blocked: bool):
         kb.button(text="✅ Разблокировать", callback_data=f"admin_unblock_company_{company_id}")
     else:
         kb.button(text="🚫 Заблокировать", callback_data=f"admin_block_company_{company_id}")
-    kb.button(text="📅 Выдать подписку", callback_data=f"admin_give_sub_{company_id}")
+    kb.button(text="📅 Управление подпиской", callback_data=f"admin_manage_sub_{company_id}")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -336,6 +336,7 @@ def admin_subscription_plans_kb(company_id: int):
     kb.button(text="6 месяцев", callback_data=f"admin_set_sub_{company_id}_6")
     kb.button(text="12 месяцев", callback_data=f"admin_set_sub_{company_id}_12")
     kb.button(text="❌ Снять подписку", callback_data=f"admin_set_sub_{company_id}_0")
+    kb.button(text="✍️ Ввести вручную", callback_data=f"admin_give_sub_{company_id}")
     kb.adjust(2)
     return kb.as_markup()
 

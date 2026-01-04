@@ -175,17 +175,54 @@ def _row(row) -> Optional[Dict]:
     return dict(row) if row else None
 
 
+def _migrate_legacy_passport(master_id: int, passport: Optional[str]) -> None:
+    if not passport:
+        return
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            "UPDATE masters SET passport = ? WHERE id = ?",
+            (encrypt_passport(passport), master_id),
+        )
+
+
 def _decrypt_passport_field(data: Optional[Dict], key: str = "passport") -> Optional[Dict]:
     if data and data.get(key):
-        data[key] = decrypt_passport(data[key])
+        decrypted, legacy = decrypt_passport(data[key])
+        data[key] = decrypted
+        if legacy and data.get("id"):
+            _migrate_legacy_passport(data["id"], decrypted)
     return data
 
 
 def _decrypt_passport_in_list(items: List[Dict], key: str = "passport") -> List[Dict]:
     for item in items:
         if item.get(key):
-            item[key] = decrypt_passport(item[key])
+            decrypted, legacy = decrypt_passport(item[key])
+            item[key] = decrypted
+            if legacy and item.get("id"):
+                _migrate_legacy_passport(item["id"], decrypted)
     return items
+
+
+def migrate_legacy_passports(limit: Optional[int] = None) -> int:
+    migrated = 0
+    with closing(get_conn()) as conn, conn:
+        c = conn.cursor()
+        query = "SELECT id, passport FROM masters WHERE passport IS NOT NULL AND passport != ''"
+        params: List[Any] = []
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        c.execute(query, params)
+        for row in c.fetchall():
+            decrypted, legacy = decrypt_passport(row["passport"])
+            if legacy and decrypted:
+                conn.execute(
+                    "UPDATE masters SET passport = ? WHERE id = ?",
+                    (encrypt_passport(decrypted), row["id"]),
+                )
+                migrated += 1
+    return migrated
 
 
 def utc_now_iso() -> str:
@@ -709,7 +746,10 @@ def get_employment_by_id(employment_id: int) -> Optional[dict]:
         row = c.fetchone()
         data = _row(row)
         if data and data.get("passport"):
-            data["passport"] = decrypt_passport(data["passport"])
+            decrypted, legacy = decrypt_passport(data["passport"])
+            data["passport"] = decrypted
+            if legacy and data.get("master_id"):
+                _migrate_legacy_passport(data["master_id"], decrypted)
         return data
 
 
