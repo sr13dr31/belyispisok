@@ -8,6 +8,7 @@ load_dotenv()
 
 # Основные настройки
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+PASSPORT_SECRET = os.getenv("PASSPORT_SECRET")
 DB_PATH = os.getenv("DB_PATH", "bot.db")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -29,6 +30,12 @@ PAYMENT_CARD = os.getenv("PAYMENT_CARD", "0000 0000 0000 0000")  # карта д
 # Валидация
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in .env")
+if not PASSPORT_SECRET:
+    raise RuntimeError(
+        "PASSPORT_SECRET is not set in .env. "
+        "Он обязателен для шифрования паспортов; "
+        "если ранее использовался BOT_TOKEN, выполните миграцию."
+    )
 
 
 def calc_subscription_price(months: int) -> int:
