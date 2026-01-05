@@ -1,3 +1,0 @@
-id,public_id,name,city,responsible_phone,subscription_until,subscription_level,blocked
-{% for company in companies %}{{ company.id }},{{ company.public_id }},"{{ company.name }}","{{ company.city or '' }}","{{ company.responsible_phone or '' }}",{{ company.subscription_until or '' }},{{ company.subscription_level or '' }},{{ company.blocked }}
-{% endfor %}

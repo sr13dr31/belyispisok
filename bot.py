@@ -25,7 +25,6 @@ except RuntimeError as e:
     print("Создайте файл .env в корне проекта со следующим содержимым:")
     print("  BOT_TOKEN=your_telegram_bot_token")
     print("  PASSPORT_SECRET=your_passport_secret")
-    print("  ADMINS=your_telegram_id")
     print("  PAYMENT_CARD=0000 0000 0000 0000")
     print("  DB_PATH=bot.db")
     print("  LOG_LEVEL=INFO")
@@ -40,7 +39,6 @@ from states import get_state, pop_state, set_state, clear_expired_states
 from utils import (
     format_company_profile,
     format_employment_reviews,
-    format_master_admin_profile,
     format_master_profile,
     format_master_public_profile,
     format_review_detail,
@@ -87,17 +85,14 @@ from db import (
     has_any_current_employment,
     has_pending_or_active_employment,
     has_pending_request_for_company,
-    set_company_blocked,
     set_company_subscription,
     set_employment_accepted,
     set_employment_leave_requested,
     set_employment_rejected,
-    set_master_blocked,
     set_master_passport_locked,
     set_user_phone,
     set_user_role,
     update_master_profile,
-    update_review_appeal_admin_decision,
     update_review_appeal_company_response,
     get_conn,
     cancel_employment_leave_request,
@@ -105,14 +100,6 @@ from db import (
     get_master_rating,
 )
 from keyboards import (
-    admin_appeal_actions_kb,
-    admin_appeals_list_kb,
-    admin_company_detail_kb,
-    admin_company_list_kb,
-    admin_main_kb,
-    admin_master_detail_kb,
-    admin_masters_list_kb,
-    admin_subscription_plans_kb,
     appeal_button_kb,
     company_appeal_actions_kb,
     company_appeals_kb,
@@ -189,20 +176,9 @@ def rating_choice_kb():
     )
 
 
-async def ensure_admin_access(target, *, alert: bool = True) -> bool:
-    user_id = target.from_user.id
-    if user_id in config.ADMIN_IDS:
-        return True
-    if isinstance(target, CallbackQuery):
-        await target.answer("Нет доступа.", show_alert=alert)
-    else:
-        await target.answer("Нет доступа.")
-    return False
-
-
 def ensure_company_can_act(company: dict, require_subscription: bool = True) -> Optional[str]:
     if company.get("blocked"):
-        return "Ваш профиль компании заблокирован администратором. Обратитесь в поддержку."
+        return "Ваш профиль компании заблокирован службой поддержки. Обратитесь в чат поддержки."
     if require_subscription and not company_has_active_subscription(company):
         return (
             "У компании нет активной подписки или она истекла.\n\n"
@@ -238,7 +214,7 @@ async def submit_master_appeal(
 
     pop_state(tg_id)
     await reply_message.answer(
-        "Ваша жалоба отправлена компании и администратору.\n"
+        "Ваша жалоба отправлена компании.\n"
         "Компания должна предоставить ответ и доказательства. "
         "Если она этого не сделает, отзыв может быть удалён.",
         reply_markup=ReplyKeyboardRemove(),
@@ -273,37 +249,6 @@ async def submit_master_appeal(
                         )
         except Exception:
             logger.exception("Не удалось уведомить компанию %s о жалобе", company["id"])
-
-    for admin_id in config.ADMIN_IDS:
-        try:
-            admin_text = (
-                f"Новая жалоба #{appeal_id} на отзыв:\n\n"
-                f"Исполнитель: {master['full_name']} ({master['public_id']})\n"
-                f"Компания: {company['name'] if company else 'не найдена'}\n\n"
-                f"Текст отзыва:\n{review['text']}\n\n"
-                f"Жалоба исполнителя:\n{reason}"
-            )
-            await bot.send_message(
-                admin_id,
-                admin_text,
-                reply_markup=admin_appeal_actions_kb(appeal_id),
-            )
-            if photo_message_ids and photo_chat_id:
-                for message_id in photo_message_ids:
-                    try:
-                        await bot.copy_message(
-                            admin_id,
-                            from_chat_id=photo_chat_id,
-                            message_id=message_id,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Не удалось переслать фото админу %s по жалобе %s",
-                            admin_id,
-                            appeal_id,
-                        )
-        except Exception:
-            logger.exception("Не удалось уведомить админа %s о жалобе %s", admin_id, appeal_id)
 
 
 def auto_review_appeals_maintenance():
@@ -721,7 +666,7 @@ async def cb_master_appeal_review(callback: CallbackQuery):
 
     await callback.message.answer(
         "Опишите, пожалуйста, с чем вы не согласны в отзыве и почему.\n"
-        "Это сообщение будет направлено компании и администратору.",
+        "Это сообщение будет направлено компании.",
         reply_markup=back_kb(),
     )
     set_state(
@@ -848,8 +793,8 @@ async def cb_master_cancel_leave(callback: CallbackQuery):
 async def cb_master_support(callback: CallbackQuery):
     await callback.message.answer(
         "Поддержка исполнителей:\n\n"
-        "Если у вас есть вопросы или спорные ситуации, вы можете написать администратору.\n"
-        "Пока для связи используется этот же чат — опишите проблему, и администратор увидит ваше сообщение."
+        "Если у вас есть вопросы или спорные ситуации, вы можете написать в поддержку.\n"
+        "Пока для связи используется этот же чат — опишите проблему, и мы увидим ваше сообщение."
     )
 
 
@@ -1560,7 +1505,7 @@ async def cb_company_appeal_detail(callback: CallbackQuery):
             "Отправьте одно сообщение, в котором:\n"
             "• Напишете ваш комментарий по ситуации;\n"
             "• Прикрепите файлы с доказательствами (если есть).\n\n"
-            "Это сообщение мы передадим администратору вместе с жалобой исполнителя.",
+            "Это сообщение мы передадим исполнителю вместе с жалобой.",
             reply_markup=back_kb(),
         )
         set_state(
@@ -1628,7 +1573,7 @@ async def cb_company_sub_plan(callback: CallbackQuery):
         f"Переведите эту сумму на карту:\n{config.PAYMENT_CARD}\n\n"
         "После оплаты отправьте в ответ на это сообщение ОДНО сообщение со скриншотом/фото чека "
         "и, при желании, текстовым комментарием.\n\n"
-        "Мы передадим это администратору для проверки и выдачи подписки.",
+        "После получения подтверждения мы активируем подписку.",
         reply_markup=back_kb(),
     )
     set_state(
@@ -1644,7 +1589,7 @@ async def cb_company_support(callback: CallbackQuery):
     await callback.message.answer(
         "Поддержка компаний:\n\n"
         "Если у вас есть вопросы по сервису, оплате подписки или спорным ситуациям, "
-        "просто опишите проблему в этом чате — администратор увидит ваше сообщение."
+        "просто опишите проблему в этом чате — мы увидим ваше сообщение."
     )
 
 
@@ -1672,372 +1617,6 @@ async def cb_viewer_about(callback: CallbackQuery):
         "Если вам нужно вызвать мастера, вы можете запросить у него ID в этом сервисе и проверить, "
         "работал ли он с компаниями и какие по нему есть отзывы."
     )
-
-
-# ==========================
-# АДМИН — КАБИНЕТ
-# ==========================
-
-
-@dp.message(Command("admin"))
-async def cmd_admin(message: Message):
-    if not await ensure_admin_access(message, alert=False):
-        return
-    await message.answer(
-        "Админ-панель:",
-        reply_markup=admin_main_kb(),
-    )
-
-
-@dp.callback_query(F.data == "admin_companies")
-async def cb_admin_companies(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    with closing(get_conn()) as conn:
-        c = conn.cursor()
-        c.execute(
-            "SELECT * FROM companies ORDER BY id DESC"
-        )
-        companies = [dict(row) for row in c.fetchall()]
-
-    if not companies:
-        await callback.message.answer("Компаний пока нет.")
-        return
-
-    await callback.message.answer(
-        "Список компаний:",
-        reply_markup=admin_company_list_kb(companies),
-    )
-
-
-@dp.callback_query(F.data.startswith("admin_company_"))
-async def cb_admin_company_detail(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    try:
-        company_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    company = get_company_by_id(company_id)
-    if not company:
-        await callback.message.answer("Компания не найдена.")
-        return
-
-    await callback.message.answer(
-        format_company_profile(company),
-        reply_markup=admin_company_detail_kb(company_id, bool(company.get("blocked"))),
-    )
-
-
-@dp.callback_query(F.data.startswith("admin_block_company_"))
-async def cb_admin_block_company(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    try:
-        company_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    set_company_blocked(company_id, True)
-    await callback.message.answer("Компания заблокирована.")
-
-
-@dp.callback_query(F.data.startswith("admin_unblock_company_"))
-async def cb_admin_unblock_company(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    try:
-        company_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    set_company_blocked(company_id, False)
-    await callback.message.answer("Компания разблокирована.")
-
-
-@dp.callback_query(F.data.startswith("admin_give_sub_"))
-async def cb_admin_give_sub(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    try:
-        company_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    await callback.message.answer(
-        "Введите срок подписки в месяцах (числом, например 1, 3, 6, 12).\n"
-        "Чтобы снять подписку, отправьте 0.",
-        reply_markup=back_kb(),
-    )
-    set_state(
-        callback.from_user.id,
-        "admin_give_sub_months",
-        company_id=company_id,
-    )
-
-
-@dp.callback_query(F.data.startswith("admin_manage_sub_"))
-async def cb_admin_manage_sub(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
-        return
-
-    try:
-        company_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    company = get_company_by_id(company_id)
-    if not company:
-        await callback.message.answer("Компания не найдена.")
-        return
-
-    await callback.message.answer(
-        "Выберите вариант управления подпиской:",
-        reply_markup=admin_subscription_plans_kb(company_id),
-    )
-
-
-@dp.callback_query(F.data.startswith("admin_set_sub_"))
-async def cb_admin_set_sub(callback: CallbackQuery):
-    if callback.from_user.id not in config.ADMIN_IDS:
-        return
-
-    data = callback.data.split("_")
-    if len(data) < 5:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    try:
-        company_id = int(data[3])
-        months = int(data[4])
-    except (ValueError, IndexError):
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    set_company_subscription(company_id, months)
-    company = get_company_by_id(company_id)
-    if not company:
-        await callback.message.answer("Компания не найдена.")
-        return
-
-    if months <= 0:
-        message = "Подписка снята."
-    else:
-        message = f"Подписка продлена на {months} мес."
-    await callback.message.answer(
-        f"{message}\n\n{format_company_profile(company)}"
-    )
-
-
-@dp.callback_query(F.data == "admin_masters")
-async def cb_admin_masters(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    with closing(get_conn()) as conn:
-        c = conn.cursor()
-        c.execute(
-            "SELECT * FROM masters ORDER BY id DESC"
-        )
-        masters = [dict(row) for row in c.fetchall()]
-
-    if not masters:
-        await callback.message.answer("Мастеров пока нет.")
-        return
-
-    await callback.message.answer(
-        "Список исполнителей:",
-        reply_markup=admin_masters_list_kb(masters),
-    )
-
-
-@dp.callback_query(F.data.startswith("admin_master_"))
-async def cb_admin_master_detail(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    try:
-        master_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    master = get_master_by_id(master_id)
-    if not master:
-        await callback.message.answer("Исполнитель не найден.")
-        return
-
-    await callback.message.answer(
-        format_master_admin_profile(master, get_master_rating(master_id)),
-        reply_markup=admin_master_detail_kb(master_id, bool(master.get("blocked"))),
-    )
-
-
-@dp.callback_query(F.data.startswith("admin_block_master_"))
-async def cb_admin_block_master(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    try:
-        master_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    set_master_blocked(master_id, True)
-    await callback.message.answer("Исполнитель заблокирован.")
-
-
-@dp.callback_query(F.data.startswith("admin_unblock_master_"))
-async def cb_admin_unblock_master(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    try:
-        master_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.message.answer("Некорректные данные.")
-        return
-
-    set_master_blocked(master_id, False)
-    await callback.message.answer("Исполнитель разблокирован.")
-
-
-@dp.callback_query(F.data == "admin_appeals")
-async def cb_admin_appeals(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    with closing(get_conn()) as conn:
-        c = conn.cursor()
-        c.execute(
-            """
-            SELECT ra.*, r.text as review_text,
-                   m.full_name as master_full_name, m.public_id as master_public_id,
-                   c2.name as company_name, c2.public_id as company_public_id
-            FROM review_appeals ra
-            JOIN reviews r ON ra.review_id = r.id
-            JOIN masters m ON ra.master_id = m.id
-            LEFT JOIN companies c2 ON ra.company_id = c2.id
-            ORDER BY ra.id DESC
-        """
-        )
-        appeals = [dict(row) for row in c.fetchall()]
-
-    if not appeals:
-        await callback.message.answer("Жалоб пока нет.")
-        return
-
-    await callback.message.answer(
-        "Жалобы на отзывы:",
-        reply_markup=admin_appeals_list_kb(appeals),
-    )
-
-
-@dp.callback_query(F.data.startswith("admin_appeal_"))
-async def cb_admin_appeal_detail(callback: CallbackQuery):
-    if not await ensure_admin_access(callback):
-        return
-
-    data = callback.data.split("_")
-    if len(data) == 3:
-        try:
-            appeal_id = int(data[2])
-        except ValueError:
-            await callback.message.answer("Некорректные данные.")
-            return
-
-        appeal = get_review_appeal_by_id(appeal_id)
-        if not appeal:
-            await callback.message.answer("Жалоба не найдена.")
-            return
-
-        company_name = appeal.get("company_name") or "не указана"
-        company_public_id = appeal.get("company_public_id") or "-"
-
-        lines = [
-            f"Жалоба #{appeal['id']}",
-            "",
-            f"Исполнитель: {appeal['master_full_name']} ({appeal['master_public_id']})",
-            f"Компания: {company_name} ({company_public_id})",
-            "",
-            "Текст отзыва:",
-            appeal["review_text"],
-            "",
-            "Жалоба исполнителя:",
-            appeal.get("master_comment") or "не указано",
-            "",
-            "Комментарий компании:",
-            appeal.get("company_comment") or "не указано",
-        ]
-        await callback.message.answer(
-            "\n".join(lines),
-            reply_markup=admin_appeal_actions_kb(appeal_id),
-        )
-    elif len(data) == 4 and data[2] in ("keep", "delete"):
-        try:
-            appeal_id = int(data[3])
-        except ValueError:
-            await callback.message.answer("Некорректные данные.")
-            return
-
-        appeal = get_review_appeal_by_id(appeal_id)
-        if not appeal:
-            await callback.message.answer("Жалоба не найдена.")
-            return
-
-        if data[2] == "keep":
-            update_review_appeal_admin_decision(
-                appeal_id,
-                "kept_review",
-                "Администратор оставил отзыв без изменений.",
-            )
-            await callback.message.answer(
-                "Решение: отзыв оставлен, жалоба отклонена."
-            )
-        else:
-            delete_review(appeal["review_id"])
-            update_review_appeal_admin_decision(
-                appeal_id,
-                "deleted_review",
-                "Администратор удалил отзыв по результатам рассмотрения жалобы.",
-            )
-            await callback.message.answer(
-                "Решение: отзыв удалён, жалоба удовлетворена."
-            )
-    elif len(data) == 4 and data[2] == "comment":
-        try:
-            appeal_id = int(data[3])
-        except ValueError:
-            await callback.message.answer("Некорректные данные.")
-            return
-
-        appeal = get_review_appeal_by_id(appeal_id)
-        if not appeal:
-            await callback.message.answer("Жалоба не найдена.")
-            return
-
-        await callback.message.answer(
-            "Напишите комментарий для исполнителя.\n"
-            "Он будет отправлен ему вместе с итоговым решением по жалобе.",
-            reply_markup=back_kb(),
-        )
-        set_state(
-            callback.from_user.id,
-            "admin_appeal_comment_text",
-            appeal_id=appeal_id,
-        )
 
 
 # ==========================
@@ -2070,10 +1649,6 @@ async def generic_message_handler(message: Message):
         return
 
     action = state.action
-    if action.startswith("admin_") and tg_id not in config.ADMIN_IDS:
-        pop_state(tg_id)
-        await message.answer("Нет доступа.")
-        return
 
     # === Регистрация исполнителя ===
     if action == "master_register_full_name":
@@ -2690,108 +2265,34 @@ async def generic_message_handler(message: Message):
         )
         pop_state(tg_id)
 
-        for admin_id in config.ADMIN_IDS:
-            try:
-                appeal = get_review_appeal_by_id(appeal_id)
+        appeal = get_review_appeal_by_id(appeal_id)
+        if appeal:
+            master = get_master_by_id(appeal["master_id"])
+            if master:
                 meta = (
-                    f"Новая информация по жалобе #{appeal_id}:\n"
-                    f"Исполнитель: {appeal['master_full_name']} ({appeal['master_public_id']})\n"
-                    f"Компания: {appeal.get('company_name') or 'не указана'} "
-                    f"({appeal.get('company_public_id') or '-'})\n\n"
-                    f"Текст отзыва:\n{appeal['review_text']}\n\n"
-                    f"Жалоба исполнителя:\n{appeal.get('master_comment') or 'не указано'}\n\n"
+                    f"Компания ответила по жалобе #{appeal_id}:\n\n"
                     f"Комментарий компании:\n{company_comment}\n\n"
-                    "Ниже прикреплены отправленные компанией материалы (если были)."
+                    "Если были приложены материалы, они будут пересланы отдельным сообщением."
                 )
                 try:
-                    await bot.send_message(
-                        admin_id,
-                        meta,
-                        reply_markup=admin_appeal_actions_kb(appeal_id),
-                    )
-                    await bot.copy_message(
-                        admin_id,
-                        from_chat_id=company_tg_chat_id,
-                        message_id=files_message_id or message.message_id,
-                    )
+                    await bot.send_message(master["tg_id"], meta)
+                    if files_message_id:
+                        await bot.copy_message(
+                            master["tg_id"],
+                            from_chat_id=company_tg_chat_id,
+                            message_id=files_message_id,
+                        )
                 except Exception:
                     logger.exception(
-                        "Не удалось переслать материалы по жалобе %s админу %s",
+                        "Не удалось уведомить мастера %s о жалобе %s",
+                        master["id"],
                         appeal_id,
-                        admin_id,
                     )
-            except Exception:
-                logger.exception("Ошибка при уведомлении админов о жалобе %s", appeal_id)
 
         await message.answer(
-            "Ваш комментарий и материалы отправлены администратору.\n"
-            "Жалоба перейдёт в стадию рассмотрения.",
+            "Ваш комментарий и материалы отправлены исполнителю.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        return
-
-    # === Админ выдаёт подписку (ввод месяцев) ===
-    if action == "admin_give_sub_months":
-        try:
-            months = int(message.text.strip())
-        except ValueError:
-            await message.answer("Введите число месяцев (например, 1, 3, 6, 12) или 0.")
-            return
-
-        if months < 0:
-            await message.answer("Срок не может быть отрицательным. Введите 0 или число месяцев.")
-            return
-
-        company_id = state.data["company_id"]
-        set_company_subscription(company_id, months)
-        pop_state(tg_id)
-        company = get_company_by_id(company_id)
-        message_lines = []
-        if months == 0:
-            message_lines.append(f"Подписка снята у компании с ID {company_id}.")
-        else:
-            message_lines.append(f"Подписка на {months} мес. выдана компании с ID {company_id}.")
-        if company:
-            message_lines.append("")
-            message_lines.append(format_company_profile(company))
-        await message.answer(
-            "\n".join(message_lines),
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return
-
-    # === Админ пишет комментарий по жалобе ===
-    if action == "admin_appeal_comment_text":
-        appeal_id = state.data["appeal_id"]
-        comment = message.text.strip()
-
-        appeal = get_review_appeal_by_id(appeal_id)
-        if not appeal:
-            await message.answer("Жалоба не найдена.")
-            pop_state(tg_id)
-            return
-
-        update_review_appeal_admin_decision(
-            appeal_id,
-            appeal["status"],
-            comment,
-        )
-        pop_state(tg_id)
-
-        master = get_master_by_id(appeal["master_id"])
-        if master:
-            try:
-                await bot.send_message(
-                    master["tg_id"],
-                    f"Комментарий администратора по вашей жалобе #{appeal_id}:\n\n{comment}",
-                )
-            except Exception:
-                logger.exception(
-                    "Не удалось отправить комментарий мастеру по жалобе %s",
-                    appeal_id,
-                )
-
-        await message.answer("Комментарий сохранён и отправлен исполнителю.", reply_markup=ReplyKeyboardRemove())
         return
 
     # === Компания отправляет чек об оплате подписки ===
@@ -2805,27 +2306,13 @@ async def generic_message_handler(message: Message):
             pop_state(tg_id)
             return
 
-        for admin_id in config.ADMIN_IDS:
-            text = (
-                f"Компания {company['name']} ({company['public_id']}) отправила чек на оплату подписки.\n"
-                f"Срок: {months} мес.\n\n"
-                "Ниже пересылаю сообщение с чеком."
-            )
-            try:
-                await bot.send_message(admin_id, text)
-                await bot.copy_message(
-                    chat_id=admin_id,
-                    from_chat_id=message.chat.id,
-                    message_id=message.message_id,
-                )
-            except Exception:
-                logger.exception("Не удалось переслать чек админу")
-
+        set_company_subscription(company_id, months)
         pop_state(tg_id)
 
+        updated_company = get_company_by_id(company_id)
         await message.answer(
-            "Ваш чек и данные по оплате отправлены администратору.\n"
-            "После проверки подписка будет выдана, и вы получите уведомление в этом чате.",
+            "Спасибо! Подписка активирована.\n\n"
+            f"{format_company_profile(updated_company) if updated_company else ''}",
             reply_markup=ReplyKeyboardRemove(),
         )
         return
