@@ -69,6 +69,7 @@ from db import (
     get_company_employments,
     get_company_ended_employments,
     get_company_requests_count,
+    get_company_verification_by_company_id,
     get_current_employment,
     get_employment_by_id,
     get_master_by_id,
@@ -90,6 +91,7 @@ from db import (
     set_employment_leave_requested,
     set_employment_rejected,
     set_master_passport_locked,
+    create_company_verification,
     set_user_phone,
     set_user_role,
     update_master_profile,
@@ -836,6 +838,30 @@ async def cb_company_edit_profile(callback: CallbackQuery):
         city=company.get("city"),
         phone=company.get("responsible_phone"),
     )
+
+
+@dp.callback_query(F.data == "company_verification")
+async def cb_company_verification(callback: CallbackQuery):
+    tg_id = callback.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await callback.message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    verification = get_company_verification_by_company_id(company["id"])
+    if verification and verification["status"] in {"WAITING"}:
+        await callback.message.answer(
+            "Ваша заявка на верификацию уже в обработке.\n"
+            f"Текущий статус: {verification['status']}"
+        )
+        return
+
+    await callback.message.answer(
+        "Для верификации отправьте фото паспорта ответственного лица.\n"
+        "Документ доступен только администраторам и хранится после принятия решения.",
+        reply_markup=back_kb(),
+    )
+    set_state(tg_id, "company_verification_photo", company_id=company["id"])
 
 
 @dp.callback_query(F.data == "company_employees")
@@ -1855,6 +1881,58 @@ async def generic_message_handler(message: Message):
         await message.answer(
             "Личный кабинет компании:", reply_markup=company_menu_kb(company["id"])
         )
+        return
+
+    # === Верификация компании: фото паспорта ===
+    if action == "company_verification_photo":
+        if message.video or message.video_note:
+            await message.answer("Сначала отправьте фото паспорта, видео будет следующим шагом.")
+            return
+        if not message.photo:
+            await message.answer("Пожалуйста, отправьте фото паспорта ответственного лица.")
+            return
+
+        company_id = state.data["company_id"]
+        photo_file_id = message.photo[-1].file_id
+
+        await message.answer(
+            "Фото получено. Теперь отправьте видео с паспортом.",
+            reply_markup=back_kb(),
+        )
+        set_state(
+            tg_id,
+            "company_verification_video",
+            company_id=company_id,
+            passport_photo_file_id=photo_file_id,
+        )
+        return
+
+    # === Верификация компании: видео с паспортом ===
+    if action == "company_verification_video":
+        if message.photo and not (message.video or message.video_note):
+            await message.answer("Нужно видео. Фото уже получено.")
+            return
+        if not (message.video or message.video_note):
+            await message.answer("Пожалуйста, отправьте видео с паспортом.")
+            return
+
+        company_id = state.data["company_id"]
+        photo_file_id = state.data["passport_photo_file_id"]
+        video = message.video or message.video_note
+        video_file_id = video.file_id
+
+        create_company_verification(
+            company_id=company_id,
+            passport_photo_file_id=photo_file_id,
+            passport_video_file_id=video_file_id,
+        )
+        pop_state(tg_id)
+        await message.answer(
+            "Верификация отправлена ✅\n"
+            "Видео хранится до принятия решения и затем удаляется.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await message.answer("Меню компании:", reply_markup=company_menu_kb(company_id))
         return
 
     # === Компания редактирует название ===

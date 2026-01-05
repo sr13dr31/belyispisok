@@ -42,6 +42,7 @@ def company_menu_kb(company_id: Optional[int] = None):
     kb.button(text=label, callback_data="company_view_requests")
 
     kb.button(text="Жалобы на отзывы", callback_data="company_view_appeals")
+    kb.button(text="Верификация компании", callback_data="company_verification")
     kb.button(text="Подписка и оплата", callback_data="company_subscription")
     kb.button(text="Поддержка", callback_data="company_support")
     kb.adjust(1)
