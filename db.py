@@ -177,6 +177,37 @@ def init_db():
         """
         )
 
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS company_verifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                required_info TEXT,
+                last_action_at TEXT,
+                passport_photo_file_id TEXT,
+                passport_video_file_id TEXT,
+                passport_video_deleted_at TEXT
+            )
+        """
+        )
+
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS action_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """
+        )
+
 
 # Helpers ---------------------------------------------------------------------
 
@@ -376,6 +407,138 @@ def get_master_by_public_id(public_id: str) -> Optional[dict]:
         c = conn.cursor()
         c.execute("SELECT * FROM masters WHERE public_id = ?", (public_id,))
         return _serialize_master(c.fetchone())
+
+
+def set_company_kyc_status(company_id: int, status: str):
+    with closing(get_conn()) as conn, conn:
+        conn.execute("UPDATE companies SET kyc_status = ? WHERE id = ?", (status, company_id))
+
+
+def create_company_verification(
+    company_id: int,
+    passport_photo_file_id: str,
+    passport_video_file_id: str,
+) -> dict:
+    created_at = utc_now_iso()
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            INSERT INTO company_verifications (
+                company_id,
+                status,
+                created_at,
+                updated_at,
+                last_action_at,
+                passport_photo_file_id,
+                passport_video_file_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                company_id,
+                "WAITING",
+                created_at,
+                created_at,
+                created_at,
+                passport_photo_file_id,
+                passport_video_file_id,
+            ),
+        )
+        c = conn.cursor()
+        c.execute("SELECT * FROM company_verifications WHERE rowid = last_insert_rowid()")
+        data = _row(c.fetchone())
+    set_company_kyc_status(company_id, "waiting")
+    return data
+
+
+def get_company_verification_by_company_id(company_id: int) -> Optional[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT * FROM company_verifications
+            WHERE company_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+        """,
+            (company_id,),
+        )
+        return _row(c.fetchone())
+
+
+def update_company_verification_status(
+    verification_id: int,
+    status: str,
+    *,
+    admin_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> Optional[dict]:
+    updated_at = utc_now_iso()
+    with closing(get_conn()) as conn, conn:
+        video_deleted_at = None
+        clear_video = status in {"APPROVED", "DECLINED"}
+        if clear_video:
+            video_deleted_at = updated_at
+        conn.execute(
+            """
+            UPDATE company_verifications
+            SET status = ?,
+                updated_at = ?,
+                last_action_at = ?,
+                passport_video_file_id = CASE WHEN ? THEN NULL ELSE passport_video_file_id END,
+                passport_video_deleted_at = COALESCE(passport_video_deleted_at, ?)
+            WHERE id = ?
+        """,
+            (status, updated_at, updated_at, 1 if clear_video else 0, video_deleted_at, verification_id),
+        )
+        c = conn.cursor()
+        c.execute("SELECT * FROM company_verifications WHERE id = ?", (verification_id,))
+        data = _row(c.fetchone())
+        if data and admin_id is not None and reason:
+            log_admin_action(
+                admin_id=admin_id,
+                entity_type="company_verification",
+                entity_id=verification_id,
+                action=f"status_{status.lower()}",
+                reason=reason,
+            )
+        if data and status in {"APPROVED", "DECLINED"}:
+            set_company_kyc_status(data["company_id"], status.lower())
+        return data
+
+
+def log_admin_action(
+    *,
+    admin_id: int,
+    entity_type: str,
+    entity_id: int,
+    action: str,
+    reason: str,
+):
+    created_at = utc_now_iso()
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            INSERT INTO action_log (admin_id, entity_type, entity_id, action, reason, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (admin_id, entity_type, entity_id, action, reason, created_at),
+        )
+
+
+def log_company_document_view(
+    *,
+    admin_id: int,
+    verification_id: int,
+    reason: str,
+):
+    log_admin_action(
+        admin_id=admin_id,
+        entity_type="company_verification",
+        entity_id=verification_id,
+        action="view_passport_photo",
+        reason=reason,
+    )
 
 
 def get_company_by_id(company_id: int) -> Optional[dict]:

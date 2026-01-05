@@ -115,6 +115,9 @@ def format_company_profile(company: dict) -> str:
     else:
         lines.append("Статус: ✅ профиль активен")
 
+    kyc_status = company.get("kyc_status") or "pending"
+    lines.append(f"Верификация: {kyc_status}")
+
     if company.get("subscription_until"):
         from datetime import datetime
         try:
