@@ -4,7 +4,6 @@
 from .formatters import (
     format_company_profile,
     format_employment_reviews,
-    format_master_admin_profile,
     format_master_profile,
     format_master_public_profile,
     format_review_detail,
@@ -22,7 +21,6 @@ from .validators import (
 __all__ = [
     "format_company_profile",
     "format_employment_reviews",
-    "format_master_admin_profile",
     "format_master_profile",
     "format_master_public_profile",
     "format_review_detail",

@@ -231,93 +231,6 @@ def company_leave_request_actions_kb(employment_id: int):
     return kb.as_markup()
 
 
-def admin_main_kb():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Список компаний", callback_data="admin_companies")
-    kb.button(text="Список мастеров", callback_data="admin_masters")
-    kb.button(text="Жалобы на отзывы", callback_data="admin_appeals")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def admin_company_list_kb(companies: List[dict]):
-    kb = InlineKeyboardBuilder()
-    for c in companies:
-        label = c["name"] or "Без названия"
-        if c.get("blocked"):
-            label += " (🚫 блок)"
-        kb.button(
-            text=label,
-            callback_data=f"admin_company_{c['id']}",
-        )
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def admin_company_detail_kb(company_id: int, blocked: bool):
-    kb = InlineKeyboardBuilder()
-    if blocked:
-        kb.button(text="✅ Разблокировать", callback_data=f"admin_unblock_company_{company_id}")
-    else:
-        kb.button(text="🚫 Заблокировать", callback_data=f"admin_block_company_{company_id}")
-    kb.button(text="📅 Управление подпиской", callback_data=f"admin_manage_sub_{company_id}")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def admin_masters_list_kb(masters: List[dict]):
-    kb = InlineKeyboardBuilder()
-    for m in masters:
-        label = m["full_name"] or "Без имени"
-        if m.get("blocked"):
-            label += " (🚫 блок)"
-        kb.button(
-            text=label,
-            callback_data=f"admin_master_{m['id']}",
-        )
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def admin_master_detail_kb(master_id: int, blocked: bool):
-    kb = InlineKeyboardBuilder()
-    if blocked:
-        kb.button(text="✅ Разблокировать", callback_data=f"admin_unblock_master_{master_id}")
-    else:
-        kb.button(text="🚫 Заблокировать", callback_data=f"admin_block_master_{master_id}")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def admin_appeals_list_kb(appeals: List[dict]):
-    kb = InlineKeyboardBuilder()
-    for a in appeals:
-        label = f"#{a['id']} {a['master_full_name']} / {a['company_name'] or 'не указано'}"
-        kb.button(
-            text=label,
-            callback_data=f"admin_appeal_{a['id']}",
-        )
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def admin_appeal_actions_kb(appeal_id: int):
-    kb = InlineKeyboardBuilder()
-    kb.button(
-        text="✅ Оставить отзыв, жалобу отклонить",
-        callback_data=f"admin_appeal_keep_{appeal_id}",
-    )
-    kb.button(
-        text="🗑 Удалить отзыв, жалобу удовлетворить",
-        callback_data=f"admin_appeal_delete_{appeal_id}",
-    )
-    kb.button(
-        text="✉ Написать комментарий мастеру",
-        callback_data=f"admin_appeal_comment_{appeal_id}",
-    )
-    kb.adjust(1)
-    return kb.as_markup()
-
 
 def company_subscription_plans_kb():
     kb = InlineKeyboardBuilder()
@@ -328,17 +241,6 @@ def company_subscription_plans_kb():
     kb.adjust(2)
     return kb.as_markup()
 
-
-def admin_subscription_plans_kb(company_id: int):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="1 месяц", callback_data=f"admin_set_sub_{company_id}_1")
-    kb.button(text="3 месяца", callback_data=f"admin_set_sub_{company_id}_3")
-    kb.button(text="6 месяцев", callback_data=f"admin_set_sub_{company_id}_6")
-    kb.button(text="12 месяцев", callback_data=f"admin_set_sub_{company_id}_12")
-    kb.button(text="❌ Снять подписку", callback_data=f"admin_set_sub_{company_id}_0")
-    kb.button(text="✍️ Ввести вручную", callback_data=f"admin_give_sub_{company_id}")
-    kb.adjust(2)
-    return kb.as_markup()
 
 
 def appeal_button_kb(review_id: int):

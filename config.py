@@ -12,11 +12,6 @@ PASSPORT_SECRET = os.getenv("PASSPORT_SECRET")
 DB_PATH = os.getenv("DB_PATH", "bot.db")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
-# Администраторы
-ADMIN_IDS = {
-    int(x.strip()) for x in os.getenv("ADMINS", "").split(",") if x.strip().isdigit()
-}
-
 # Настройки подписок
 PRICE_PER_MONTH = 790  # базовая цена за 1 месяц
 PLAN_DISCOUNTS = {
