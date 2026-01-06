@@ -253,7 +253,7 @@ async def submit_master_appeal(
             logger.exception("Не удалось уведомить компанию %s о жалобе", company["id"])
 
 
-def auto_review_appeals_maintenance():
+async def auto_review_appeals_maintenance():
     """Отслеживание жалоб: напоминание через 3 дня и автоудаление через 5 дней."""
     now = datetime.utcnow()
     three_days_ago = now - timedelta(days=3)
@@ -292,26 +292,26 @@ def auto_review_appeals_maintenance():
                     "Пожалуйста, ответьте на жалобу и при необходимости приложите доказательства."
                 )
                 try:
-                    asyncio.create_task(bot.send_message(company["tg_id"], text))
+                    await bot.send_message(company["tg_id"], text)
                 except Exception:
                     logger.exception(
                         "Не удалось отправить напоминание компании по жалобе %s",
                         appeal["id"],
                     )
 
-            with closing(get_conn()) as conn, conn:
-                conn.execute(
-                    """
-                    UPDATE review_appeals
-                    SET reminder_sent_at = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        datetime.utcnow().isoformat(timespec="seconds"),
-                        datetime.utcnow().isoformat(timespec="seconds"),
-                        appeal["id"],
-                    ),
-                )
+        with closing(get_conn()) as conn, conn:
+            conn.execute(
+                """
+                UPDATE review_appeals
+                SET reminder_sent_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    datetime.utcnow().isoformat(timespec="seconds"),
+                    datetime.utcnow().isoformat(timespec="seconds"),
+                    appeal["id"],
+                ),
+            )
 
         if created_at <= five_days_ago:
             review_id = appeal["review_id"]
@@ -338,7 +338,7 @@ def auto_review_appeals_maintenance():
                     "Отзыв был удалён."
                 )
                 try:
-                    asyncio.create_task(bot.send_message(master["tg_id"], text))
+                    await bot.send_message(master["tg_id"], text)
                 except Exception:
                     logger.exception(
                         "Не удалось уведомить мастера %s об автоудалении отзыва",
@@ -2417,11 +2417,11 @@ async def generic_message_handler(message: Message):
             pop_state(tg_id)
             return
 
-        with closing(get_conn()) as conn, conn:
-            conn.execute(
-                "UPDATE masters SET passport = ?, passport_locked = 1 WHERE id = ?",
-                (new_passport, master_id),
-            )
+        update_master_profile(
+            master_id,
+            passport=new_passport,
+            passport_locked=True,
+        )
 
         pop_state(tg_id)
 
@@ -2475,11 +2475,11 @@ async def generic_message_handler(message: Message):
 
         passport_locked = bool(state.data.get("passport_locked"))
         if passport_locked:
-            with closing(get_conn()) as conn, conn:
-                conn.execute(
-                    "UPDATE masters SET full_name = ?, phone = ? WHERE id = ?",
-                    (state.data["full_name"], state.data["phone"], master_id),
-                )
+            update_master_profile(
+                master_id,
+                full_name=state.data["full_name"],
+                phone=state.data["phone"],
+            )
             pop_state(tg_id)
             master = get_master_by_id(master_id)
             await message.answer(
@@ -2511,11 +2511,12 @@ async def generic_message_handler(message: Message):
                 return
             state.data["passport"] = new_passport
 
-        with closing(get_conn()) as conn, conn:
-            conn.execute(
-                "UPDATE masters SET full_name = ?, phone = ?, passport = ? WHERE id = ?",
-                (state.data["full_name"], state.data["phone"], state.data["passport"], master_id),
-            )
+        update_master_profile(
+            master_id,
+            full_name=state.data["full_name"],
+            phone=state.data["phone"],
+            passport=state.data["passport"],
+        )
 
         pop_state(tg_id)
         master = get_master_by_id(master_id)
@@ -2572,7 +2573,7 @@ async def maintenance_worker():
                         "Не удалось уведомить компанию %s об авто-увольнении",
                         employment["company_id"],
                     )
-            auto_review_appeals_maintenance()
+            await auto_review_appeals_maintenance()
             clear_expired_states(max_age_hours=24)  # Очистка состояний старше 24 часов
         except Exception:
             logger.exception("Ошибка в задаче обслуживания (maintenance_worker)")
