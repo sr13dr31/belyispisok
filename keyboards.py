@@ -7,9 +7,9 @@ from db import get_company_requests_count, get_company_leave_requests_count
 
 def role_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.button(text="Я исполнитель", callback_data="role_master")
-    kb.button(text="Я компания", callback_data="role_company")
-    kb.button(text="Я обычный пользователь", callback_data="role_viewer")
+    kb.button(text="Специалист\nРегистрация и подтверждение опыта", callback_data="role_master")
+    kb.button(text="Компания\nРабота с реестром и пометками", callback_data="role_company")
+    kb.button(text="Проверка по ID\nПросмотр статуса специалиста", callback_data="role_viewer")
     kb.adjust(1)
     return kb.as_markup()
 
