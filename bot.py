@@ -379,6 +379,61 @@ async def cmd_role(message: Message):
     await message.answer("Выберите вашу роль:", reply_markup=role_keyboard())
 
 
+@dp.message(Command("menu"))
+async def cmd_menu(message: Message):
+    tg_id = message.from_user.id
+    user = get_user(tg_id)
+    role = user["role"] if user else None
+
+    if role == "master":
+        master = get_master_by_user(tg_id)
+        if not master:
+            await message.answer(
+                "Вы выбрали роль исполнителя.\nДавайте зарегистрируем вас.\n\n"
+                "Введите ваше ФИО:",
+                reply_markup=back_kb(),
+            )
+            set_state(tg_id, "master_register_full_name")
+            return
+
+        rating = get_master_rating(master["id"])
+        await message.answer(format_master_profile(master, rating))
+        await message.answer("Меню исполнителя:", reply_markup=master_menu_kb())
+        return
+
+    if role == "company":
+        company = get_company_by_user(tg_id)
+        if not company:
+            await message.answer(
+                "Вы выбрали роль компании.\nДавайте зарегистрируем вашу компанию.\n\n"
+                "Введите название компании:",
+                reply_markup=back_kb(),
+            )
+            set_state(tg_id, "company_enter_name")
+            return
+
+        await message.answer(format_company_profile(company))
+        await message.answer(
+            "Меню компании:", reply_markup=company_menu_kb(company["id"])
+        )
+        return
+
+    if role == "viewer":
+        if not user or not user.get("phone"):
+            await message.answer(
+                "Чтобы мы могли при необходимости связаться с вами,\n"
+                "пожалуйста, отправьте ваш номер телефона:",
+                reply_markup=back_kb(),
+            )
+            set_state(tg_id, "viewer_enter_phone")
+            return
+
+        await message.answer("Меню:", reply_markup=viewer_menu_kb())
+        return
+
+    await message.answer("Выберите вашу роль:", reply_markup=role_keyboard())
+
+
 @dp.message(Command("info"))
 async def cmd_info(message: Message):
     user = get_user(message.from_user.id) or get_or_create_user(message)
