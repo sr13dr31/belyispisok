@@ -105,6 +105,17 @@ def init_db():
             except sqlite3.OperationalError:
                 pass
 
+        for ddl in (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_public_id ON companies(public_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_masters_public_id ON masters(public_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_tg_id ON companies(tg_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_masters_tg_id ON masters(tg_id)",
+        ):
+            try:
+                c.execute(ddl)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError):
+                pass
+
         now = utc_now_iso()
         c.execute("UPDATE companies SET created_at = ? WHERE created_at IS NULL", (now,))
         c.execute("UPDATE masters SET created_at = ? WHERE created_at IS NULL", (now,))
