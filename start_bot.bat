@@ -1,21 +1,23 @@
 @echo off
 cd /d "%~dp0"
 
+REM Включаем UTF-8 в cmd
+chcp 65001 >nul
+
 echo Текущая папка:
 cd
+echo.
+
+REM Путь к Python
+set "PY=C:\Users\serda\AppData\Local\Programs\Python\Python311\python.exe"
+
+echo Запуск бота (отдельное окно)...
+start "Telegram Bot" cmd /k ""%PY%" bot.py"
 
 echo.
-echo Запуск бота...
-"C:\Users\serda\AppData\Local\Programs\Python\Python311\python.exe" bot.py
-
-if errorlevel 1 (
-    echo.
-    echo ОШИБКА при запуске бота!
-    echo Проверьте:
-    echo 1. Установлены ли зависимости (pip install -r requirements.txt)
-    echo 2. Создан ли .env и указан BOT_TOKEN
-    echo 3. Логи выше на наличие ошибок
-)
+echo Запуск admin web панели (отдельное окно)...
+start "Admin Web" cmd /k ""%PY%" start_admin_ui.py"
 
 echo.
+echo Оба процесса запущены. Эти окна можно не закрывать.
 pause

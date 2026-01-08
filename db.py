@@ -110,6 +110,21 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_masters_public_id ON masters(public_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_tg_id ON companies(tg_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_masters_tg_id ON masters(tg_id)",
+            # Индексы для улучшения производительности запросов
+            "CREATE INDEX IF NOT EXISTS idx_employments_master_id ON employments(master_id)",
+            "CREATE INDEX IF NOT EXISTS idx_employments_company_id ON employments(company_id)",
+            "CREATE INDEX IF NOT EXISTS idx_employments_status ON employments(status)",
+            "CREATE INDEX IF NOT EXISTS idx_employments_leave_requested_at ON employments(leave_requested_at)",
+            "CREATE INDEX IF NOT EXISTS idx_reviews_master_id ON reviews(master_id)",
+            "CREATE INDEX IF NOT EXISTS idx_reviews_company_id ON reviews(company_id)",
+            "CREATE INDEX IF NOT EXISTS idx_reviews_employment_id ON reviews(employment_id)",
+            "CREATE INDEX IF NOT EXISTS idx_review_appeals_status ON review_appeals(status)",
+            "CREATE INDEX IF NOT EXISTS idx_review_appeals_company_id ON review_appeals(company_id)",
+            "CREATE INDEX IF NOT EXISTS idx_review_appeals_master_id ON review_appeals(master_id)",
+            "CREATE INDEX IF NOT EXISTS idx_review_appeals_review_id ON review_appeals(review_id)",
+            "CREATE INDEX IF NOT EXISTS idx_review_appeals_created_at ON review_appeals(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_user_states_tg_id ON user_states(tg_id)",
+            "CREATE INDEX IF NOT EXISTS idx_user_states_created_at ON user_states(created_at)",
         ):
             try:
                 c.execute(ddl)
@@ -292,10 +307,13 @@ def _add_months(base: datetime, months: int) -> datetime:
 
 def generate_public_id(prefix: str, length: int = 6) -> str:
     alphabet = string.digits
-    while True:
+    max_attempts = 1000  # Защита от бесконечного цикла
+    attempts = 0
+    
+    while attempts < max_attempts:
         random_part = "".join(secrets.choice(alphabet) for _ in range(length))
         public_id = f"{prefix}-{random_part}"
-        with closing(get_conn()) as conn:
+        with closing(get_conn()) as conn, conn:
             c = conn.cursor()
             c.execute(
                 "SELECT 1 FROM masters WHERE public_id = ? UNION SELECT 1 FROM companies WHERE public_id = ?",
@@ -303,6 +321,13 @@ def generate_public_id(prefix: str, length: int = 6) -> str:
             )
             if not c.fetchone():
                 return public_id
+        attempts += 1
+    
+    # Если не удалось найти уникальный ID, увеличиваем длину
+    if length < 10:
+        return generate_public_id(prefix, length + 1)
+    
+    raise RuntimeError(f"Не удалось сгенерировать уникальный public_id для префикса {prefix}")
 
 
 # Users -----------------------------------------------------------------------
@@ -676,6 +701,8 @@ def update_master_profile(
     passport: Optional[str] = None,
     passport_locked: Optional[bool] = None,
 ):
+    # Белый список разрешённых колонок для безопасности
+    allowed_columns = {"full_name", "phone", "passport", "passport_locked"}
     sets = []
     params: List[Any] = []
 
@@ -694,6 +721,12 @@ def update_master_profile(
 
     if not sets:
         return
+
+    # Проверка безопасности: все колонки должны быть в белом списке
+    for set_clause in sets:
+        column_name = set_clause.split(" = ")[0].strip()
+        if column_name not in allowed_columns:
+            raise ValueError(f"Попытка обновить неразрешённую колонку: {column_name}")
 
     params.append(master_id)
     with closing(get_conn()) as conn, conn:

@@ -59,3 +59,4 @@ desktop.ini
 # Frontend source directories
 !admin-ui/src/lib/
 !admin-ui/src/lib/**
+admin-ui/node_modules/

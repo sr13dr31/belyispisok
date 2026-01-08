@@ -115,3 +115,59 @@ def validate_company_name(name: str) -> Tuple[bool, Optional[str]]:
     
     return True, None
 
+
+def validate_review_text(text: str) -> Tuple[bool, Optional[str]]:
+    """
+    Валидация текста отзыва.
+    Возвращает (is_valid, error_message)
+    """
+    if not text or not text.strip():
+        return False, "Текст отзыва не может быть пустым."
+    
+    text = text.strip()
+    
+    if len(text) < 10:
+        return False, "Текст отзыва слишком короткий. Минимум 10 символов."
+    
+    if len(text) > 5000:
+        return False, "Текст отзыва слишком длинный. Максимум 5000 символов."
+    
+    return True, None
+
+
+def validate_position(position: str) -> Tuple[bool, Optional[str]]:
+    """
+    Валидация должности.
+    Возвращает (is_valid, error_message)
+    """
+    if not position or not position.strip():
+        return True, None  # Должность необязательна
+    
+    position = position.strip()
+    
+    if len(position) < 2:
+        return False, "Название должности слишком короткое. Минимум 2 символа."
+    
+    if len(position) > 200:
+        return False, "Название должности слишком длинное. Максимум 200 символов."
+    
+    return True, None
+
+
+def validate_appeal_reason(reason: str) -> Tuple[bool, Optional[str]]:
+    """
+    Валидация причины жалобы.
+    Возвращает (is_valid, error_message)
+    """
+    if not reason or not reason.strip():
+        return False, "Причина жалобы не может быть пустой."
+    
+    reason = reason.strip()
+    
+    if len(reason) < 10:
+        return False, "Причина жалобы слишком короткая. Минимум 10 символов."
+    
+    if len(reason) > 2000:
+        return False, "Причина жалобы слишком длинная. Максимум 2000 символов."
+    
+    return True, None

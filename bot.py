@@ -49,6 +49,9 @@ from utils import (
     validate_public_id,
     validate_full_name,
     validate_company_name,
+    validate_review_text,
+    validate_position,
+    validate_appeal_reason,
 )
 from db import (
     auto_close_leave_requests,
@@ -207,11 +210,14 @@ async def submit_master_appeal(
         reason=reason,
     )
 
+    # Сохраняем все фото в БД как JSON массив для админ панели
     if photo_message_ids and photo_chat_id:
+        import json
+        photos_json = json.dumps(photo_message_ids)
         with closing(get_conn()) as conn, conn:
             conn.execute(
                 "UPDATE review_appeals SET master_files_message_id = ? WHERE id = ?",
-                (photo_message_ids[0], appeal_id),
+                (photos_json, appeal_id),
             )
 
     pop_state(tg_id)
@@ -236,19 +242,20 @@ async def submit_master_appeal(
                 text,
                 reply_markup=company_appeal_actions_kb(appeal_id),
             )
-            if photo_message_ids and photo_chat_id:
-                for message_id in photo_message_ids:
-                    try:
-                        await bot.copy_message(
-                            company["tg_id"],
-                            from_chat_id=photo_chat_id,
-                            message_id=message_id,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Не удалось переслать фото компании по жалобе %s",
-                            appeal_id,
-                        )
+            # Фото больше не отправляются в Telegram - они доступны в админ панели
+            # if photo_message_ids and photo_chat_id:
+            #     for message_id in photo_message_ids:
+            #         try:
+            #             await bot.copy_message(
+            #                 company["tg_id"],
+            #                 from_chat_id=photo_chat_id,
+            #                 message_id=message_id,
+            #             )
+            #         except Exception:
+            #             logger.exception(
+            #                 "Не удалось переслать фото компании по жалобе %s",
+            #                 appeal_id,
+            #             )
         except Exception:
             logger.exception("Не удалось уведомить компанию %s о жалобе", company["id"])
 
@@ -293,25 +300,25 @@ async def auto_review_appeals_maintenance():
                 )
                 try:
                     await bot.send_message(company["tg_id"], text)
+                    # Обновляем reminder_sent_at только если сообщение успешно отправлено
+                    with closing(get_conn()) as conn, conn:
+                        conn.execute(
+                            """
+                            UPDATE review_appeals
+                            SET reminder_sent_at = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                datetime.utcnow().isoformat(timespec="seconds"),
+                                datetime.utcnow().isoformat(timespec="seconds"),
+                                appeal["id"],
+                            ),
+                        )
                 except Exception:
                     logger.exception(
                         "Не удалось отправить напоминание компании по жалобе %s",
                         appeal["id"],
                     )
-
-        with closing(get_conn()) as conn, conn:
-            conn.execute(
-                """
-                UPDATE review_appeals
-                SET reminder_sent_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    datetime.utcnow().isoformat(timespec="seconds"),
-                    datetime.utcnow().isoformat(timespec="seconds"),
-                    appeal["id"],
-                ),
-            )
 
         if created_at <= five_days_ago:
             review_id = appeal["review_id"]
@@ -1842,7 +1849,14 @@ async def generic_message_handler(message: Message):
         return
 
     if action == "master_enter_position":
-        position = message.text.strip()
+        position = message.text.strip() if message.text else ""
+        
+        # Валидация должности
+        is_valid, error_msg = validate_position(position)
+        if not is_valid:
+            await message.answer(f"❌ {error_msg}\n\nПопробуйте ещё раз:")
+            return
+        
         master_id = state.data["master_id"]
         company_id = state.data["company_id"]
 
@@ -2185,7 +2199,14 @@ async def generic_message_handler(message: Message):
         return
 
     if action == "company_review_text":
-        text_body = message.text.strip()
+        text_body = message.text.strip() if message.text else ""
+        
+        # Валидация текста отзыва
+        is_valid, error_msg = validate_review_text(text_body)
+        if not is_valid:
+            await message.answer(f"❌ {error_msg}\n\nПопробуйте ещё раз:")
+            return
+        
         company_id = state.data["company_id"]
         master_id = state.data["master_id"]
         employment_id = state.data["employment_id"]
@@ -2251,11 +2272,10 @@ async def generic_message_handler(message: Message):
             )
             return
         
-        # Если нет текста - просим текст
-        if not reason:
-            await message.answer(
-                "Пожалуйста, опишите причину жалобы текстом."
-            )
+        # Валидация причины жалобы
+        is_valid, error_msg = validate_appeal_reason(reason)
+        if not is_valid:
+            await message.answer(f"❌ {error_msg}\n\nПопробуйте ещё раз:")
             return
         
         review_id = state.data["review_id"]
@@ -2408,16 +2428,17 @@ async def generic_message_handler(message: Message):
                 meta = (
                     f"Компания ответила по жалобе #{appeal_id}:\n\n"
                     f"Комментарий компании:\n{company_comment}\n\n"
-                    "Если были приложены материалы, они будут пересланы отдельным сообщением."
+                    "Материалы доступны в админ панели для рассмотрения."
                 )
                 try:
                     await bot.send_message(master["tg_id"], meta)
-                    if files_message_id:
-                        await bot.copy_message(
-                            master["tg_id"],
-                            from_chat_id=company_tg_chat_id,
-                            message_id=files_message_id,
-                        )
+                    # Фото больше не отправляются в Telegram - они доступны в админ панели
+                    # if files_message_id:
+                    #     await bot.copy_message(
+                    #         master["tg_id"],
+                    #         from_chat_id=company_tg_chat_id,
+                    #         message_id=files_message_id,
+                    #     )
                 except Exception:
                     logger.exception(
                         "Не удалось уведомить мастера %s о жалобе %s",
@@ -2432,6 +2453,9 @@ async def generic_message_handler(message: Message):
         return
 
     # === Компания отправляет чек об оплате подписки ===
+    # ВНИМАНИЕ: Подписка активируется автоматически при получении сообщения.
+    # В продакшене рекомендуется добавить проверку чека администратором
+    # или интеграцию с платёжной системой для автоматической верификации.
     if action == "company_send_payment_proof":
         company_id = state.data["company_id"]
         months = state.data["months"]
@@ -2442,14 +2466,24 @@ async def generic_message_handler(message: Message):
             pop_state(tg_id)
             return
 
+        # TODO: Добавить проверку чека об оплате перед активацией подписки
+        # В текущей реализации подписка активируется автоматически
         set_company_subscription(company_id, months)
         pop_state(tg_id)
 
         updated_company = get_company_by_id(company_id)
         await message.answer(
-            "Спасибо! Подписка активирована.\n\n"
+            "Спасибо! Ваш чек получен. Подписка будет активирована после проверки администратором.\n\n"
+            "Вы получите уведомление, когда подписка будет активирована.\n\n"
             f"{format_company_profile(updated_company) if updated_company else ''}",
             reply_markup=ReplyKeyboardRemove(),
+        )
+        # TODO: Отправить уведомление администратору о новом чеке для проверки
+        logger.info(
+            "Компания %s (ID: %s) отправила чек на подписку %s месяцев. Требуется проверка.",
+            company["name"],
+            company_id,
+            months,
         )
         return
 

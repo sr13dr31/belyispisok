@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   BadgeCheck,
@@ -104,10 +104,32 @@ const ActionButton = ({
   </Button>
 );
 
+type Appeal = {
+  id: number;
+  review_id: number;
+  master_id: number;
+  company_id: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  master_comment: string;
+  company_comment: string;
+  master_files_message_id: string | null;
+  company_files_message_id: number | null;
+  review_text: string;
+  master_full_name: string;
+  master_public_id: string;
+  company_name: string;
+  company_public_id: string;
+};
+
 export default function App() {
   const [active, setActive] = useState("dashboard");
   const [dialog, setDialog] = useState<DialogState>(defaultDialog);
   const [reason, setReason] = useState("");
+  const [appeals, setAppeals] = useState<Appeal[]>([]);
+  const [selectedAppeal, setSelectedAppeal] = useState<Appeal | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const openDialog = (state: Omit<DialogState, "open">) => {
     setReason("");
@@ -117,6 +139,23 @@ export default function App() {
   const closeDialog = () => setDialog(defaultDialog);
 
   const pageTitle = useMemo(() => menuItems.find((item) => item.key === active)?.label, [active]);
+
+  // Загрузка жалоб при открытии раздела споров
+  useEffect(() => {
+    if (active === "disputes") {
+      setLoading(true);
+      fetch("/api/review-appeals")
+        .then((res) => res.json())
+        .then((data) => {
+          setAppeals(data);
+          setLoading(false);
+        })
+        .catch((err) => {
+          console.error("Ошибка загрузки жалоб:", err);
+          setLoading(false);
+        });
+    }
+  }, [active]);
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
@@ -187,10 +226,38 @@ export default function App() {
                     <CardTitle>Быстрые действия</CardTitle>
                   </CardHeader>
                   <CardContent className="flex flex-wrap gap-3">
-                    <Button variant="secondary">Открыть новые споры</Button>
-                    <Button variant="secondary">Компании на верификации</Button>
-                    <Button variant="secondary">Заблокированные компании</Button>
-                    <Button variant="secondary">Новые тикеты поддержки</Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setActive("disputes");
+                      }}
+                    >
+                      Открыть новые споры
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setActive("verification");
+                      }}
+                    >
+                      Компании на верификации
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setActive("access");
+                      }}
+                    >
+                      Заблокированные компании
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setActive("support");
+                      }}
+                    >
+                      Новые тикеты поддержки
+                    </Button>
                   </CardContent>
                 </Card>
               </div>
@@ -251,7 +318,10 @@ export default function App() {
                                 <ActionButton
                                   label="Открыть"
                                   icon={FileText}
-                                  onClick={() => {}}
+                                  onClick={() => {
+                                    // Открыть детали регистрации
+                                    console.log("Открыть регистрацию:", row.id);
+                                  }}
                                 />
                                 <ActionButton
                                   label="Принять"
@@ -652,143 +722,135 @@ export default function App() {
                 {filters("dispute")}
                 <Card>
                   <CardHeader>
-                    <CardTitle>Очередь споров</CardTitle>
+                    <CardTitle>Очередь жалоб на отзывы</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Dispute ID</TableHead>
-                          <TableHead>Signal ID</TableHead>
-                          <TableHead>Executor</TableHead>
-                          <TableHead>Company</TableHead>
-                          <TableHead>Severity</TableHead>
-                          <TableHead>Статус</TableHead>
-                          <TableHead>Создано</TableHead>
-                          <TableHead>Last action</TableHead>
-                          <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {[
-                          {
-                            id: "D-4001",
-                            signal: "S-2201",
-                            executor: "M-103942",
-                            company: "C-440221",
-                            severity: "HIGH",
-                            status: "IN_REVIEW",
-                            created: "2024-10-10",
-                            last: "2024-10-12",
-                          },
-                        ].map((row) => (
-                          <TableRow key={row.id}>
-                            <TableCell className="font-mono">{row.id}</TableCell>
-                            <TableCell className="font-mono">{row.signal}</TableCell>
-                            <TableCell className="font-mono">{row.executor}</TableCell>
-                            <TableCell className="font-mono">{row.company}</TableCell>
-                            <TableCell>{row.severity}</TableCell>
-                            <TableCell>{statusBadge(row.status)}</TableCell>
-                            <TableCell>{row.created}</TableCell>
-                            <TableCell>{row.last}</TableCell>
-                            <TableCell className="text-right">
-                              <div className="inline-flex gap-2">
-                                <ActionButton
-                                  label="Оставить сигнал"
-                                  icon={Check}
-                                  onClick={() =>
-                                    openDialog({
-                                      title: "Оставить сигнал",
-                                      description: "Сигнал останется активным для исполнителя.",
-                                      confirmLabel: "Подтвердить",
-                                      variant: "primary",
-                                    })
-                                  }
-                                />
-                                <ActionButton
-                                  label="Снять сигнал"
-                                  icon={X}
-                                  onClick={() =>
-                                    openDialog({
-                                      title: "Снять сигнал",
-                                      description: "Сигнал будет снят после подтверждения.",
-                                      confirmLabel: "Снять",
-                                      variant: "danger",
-                                    })
-                                  }
-                                />
-                                <ActionButton
-                                  label="Архивировать"
-                                  icon={FileText}
-                                  onClick={() =>
-                                    openDialog({
-                                      title: "Архивировать спор",
-                                      description: "Спор будет архивирован без изменения статуса.",
-                                      confirmLabel: "Архивировать",
-                                      variant: "primary",
-                                    })
-                                  }
-                                />
-                                <ActionButton
-                                  label="Запросить данные"
-                                  icon={AlertCircle}
-                                  onClick={() =>
-                                    openDialog({
-                                      title: "Запросить данные",
-                                      description: "Спор перейдёт в WAITING_INFO.",
-                                      confirmLabel: "Запросить",
-                                      variant: "primary",
-                                    })
-                                  }
-                                />
-                                <ActionButton
-                                  label="Закрыть спор"
-                                  icon={X}
-                                  onClick={() =>
-                                    openDialog({
-                                      title: "Закрыть спор",
-                                      description: "Спор будет закрыт и помечен как CLOSED.",
-                                      confirmLabel: "Закрыть",
-                                      variant: "danger",
-                                    })
-                                  }
-                                />
-                              </div>
-                            </TableCell>
+                    {loading ? (
+                      <div className="py-8 text-center text-slate-500">Загрузка...</div>
+                    ) : appeals.length === 0 ? (
+                      <div className="py-8 text-center text-slate-500">Нет жалоб</div>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Appeal ID</TableHead>
+                            <TableHead>Review ID</TableHead>
+                            <TableHead>Executor</TableHead>
+                            <TableHead>Company</TableHead>
+                            <TableHead>Статус</TableHead>
+                            <TableHead>Создано</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                        </TableHeader>
+                        <TableBody>
+                          {appeals.map((appeal) => (
+                            <TableRow
+                              key={appeal.id}
+                              className={selectedAppeal?.id === appeal.id ? "bg-blue-50" : ""}
+                              onClick={() => setSelectedAppeal(appeal)}
+                            >
+                              <TableCell className="font-mono">#{appeal.id}</TableCell>
+                              <TableCell className="font-mono">#{appeal.review_id}</TableCell>
+                              <TableCell className="font-mono">
+                                {appeal.master_full_name} ({appeal.master_public_id})
+                              </TableCell>
+                              <TableCell className="font-mono">
+                                {appeal.company_name || "-"} ({appeal.company_public_id || "-"})
+                              </TableCell>
+                              <TableCell>{statusBadge(appeal.status)}</TableCell>
+                              <TableCell>{new Date(appeal.created_at).toLocaleDateString("ru-RU")}</TableCell>
+                              <TableCell className="text-right">
+                                <div className="inline-flex gap-2">
+                                  <ActionButton
+                                    label="Открыть"
+                                    icon={FileText}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedAppeal(appeal);
+                                    }}
+                                  />
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
                   </CardContent>
                 </Card>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Карточка спора</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <div>
-                      <p className="text-slate-500">signal_details</p>
-                      <p className="text-slate-700">Исполнитель не подтвердил выполнение.</p>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">related_request_id</span>
-                      <span className="font-mono">REQ-8831</span>
-                    </div>
-                    <div>
-                      <p className="text-slate-500">позиция компании</p>
-                      <p className="text-slate-700">Подтверждает нарушение сроков.</p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500">позиция исполнителя</p>
-                      <p className="text-slate-700">Утверждает форс-мажор.</p>
-                    </div>
-                    <div>
-                      <p className="text-slate-500">материалы</p>
-                      <p className="text-slate-700">2 файла, 1 комментарий</p>
-                    </div>
-                  </CardContent>
-                </Card>
+                {selectedAppeal && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Карточка жалобы #{selectedAppeal.id}</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">appeal_id</span>
+                        <span className="font-mono">#{selectedAppeal.id}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">review_id</span>
+                        <span className="font-mono">#{selectedAppeal.review_id}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">executor</span>
+                        <span className="font-mono">
+                          {selectedAppeal.master_full_name} ({selectedAppeal.master_public_id})
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">company</span>
+                        <span className="font-mono">
+                          {selectedAppeal.company_name || "-"} ({selectedAppeal.company_public_id || "-"})
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">текст отзыва</p>
+                        <p className="text-slate-700">{selectedAppeal.review_text}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">жалоба исполнителя</p>
+                        <p className="text-slate-700">{selectedAppeal.master_comment || "не указано"}</p>
+                      </div>
+                      {selectedAppeal.company_comment && (
+                        <div>
+                          <p className="text-slate-500">ответ компании</p>
+                          <p className="text-slate-700">{selectedAppeal.company_comment}</p>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-slate-500">материалы</p>
+                        <div className="mt-2 space-y-2">
+                          {selectedAppeal.master_files_message_id && (
+                            <div>
+                              <p className="text-xs text-slate-500">Фото от исполнителя:</p>
+                              <p className="text-xs text-slate-700">
+                                {(() => {
+                                  try {
+                                    const photos = JSON.parse(selectedAppeal.master_files_message_id);
+                                    return Array.isArray(photos) ? `${photos.length} фото` : "1 фото";
+                                  } catch {
+                                    return "1 фото";
+                                  }
+                                })()}
+                              </p>
+                            </div>
+                          )}
+                          {selectedAppeal.company_files_message_id && (
+                            <div>
+                              <p className="text-xs text-slate-500">Фото от компании:</p>
+                              <p className="text-xs text-slate-700">1 файл</p>
+                            </div>
+                          )}
+                          {!selectedAppeal.master_files_message_id && !selectedAppeal.company_files_message_id && (
+                            <p className="text-xs text-slate-500">Нет прикрепленных файлов</p>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
               </div>
             )}
 
@@ -1064,7 +1126,19 @@ export default function App() {
                 Отменить
               </Button>
             </DialogClose>
-            <Button variant={dialog.variant} type="button" onClick={closeDialog}>
+            <Button
+              variant={dialog.variant}
+              type="button"
+              onClick={() => {
+                if (reason.trim()) {
+                  // Здесь можно добавить вызов API для выполнения действия
+                  console.log("Действие:", dialog.title, "Причина:", reason);
+                  closeDialog();
+                } else {
+                  alert("Пожалуйста, укажите причину действия");
+                }
+              }}
+            >
               {dialog.confirmLabel}
             </Button>
           </DialogFooter>
