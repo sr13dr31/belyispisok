@@ -31,6 +31,8 @@ def company_menu_kb(company_id: Optional[int] = None):
     kb.button(text="Профиль компании", callback_data="company_profile")
     kb.button(text="Изменить профиль", callback_data="company_edit_profile")
     kb.button(text="Мои сотрудники", callback_data="company_employees")
+    kb.button(text="⚡ Быстрый коннект", callback_data="company_fastconnect")
+    kb.button(text="📋 Мои сотрудничества", callback_data="company_collaborations")
     kb.button(text="Проверить сотрудника по ID", callback_data="company_check_master")
 
     label = "Запросы"
@@ -247,5 +249,47 @@ def company_subscription_plans_kb():
 def appeal_button_kb(review_id: int):
     kb = InlineKeyboardBuilder()
     kb.button(text="Обжаловать отзыв", callback_data=f"master_appeal_{review_id}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def fastconnect_confirm_kb(token: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Подтвердить сотрудничество", callback_data=f"fastconnect_confirm_{token}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def company_collaborations_filter_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Активные", callback_data="company_collabs_active")
+    kb.button(text="Архив", callback_data="company_collabs_archive")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def company_collaboration_list_item_kb(collaboration_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Открыть", callback_data=f"company_collab_open_{collaboration_id}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def company_collaboration_actions_kb(
+    collaboration_id: int,
+    chat_link: str,
+    can_close: bool = True,
+):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💬 Открыть чат", url=chat_link)
+    if can_close:
+        kb.button(
+            text="✅ Закрыть как успешное",
+            callback_data=f"company_collab_close_success_{collaboration_id}",
+        )
+        kb.button(
+            text="⚠️ Закрыть как проблемное",
+            callback_data=f"company_collab_close_problem_{collaboration_id}",
+        )
     kb.adjust(1)
     return kb.as_markup()
