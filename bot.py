@@ -416,7 +416,11 @@ async def handle_fastconnect_start(message: Message, token: str):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     get_or_create_user(message)
-    args = message.get_args()
+    args = ""
+    if message.text:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            args = parts[1].strip()
     if args and args.startswith("fastconnect_"):
         token = args.split("fastconnect_", 1)[-1]
         if token:
