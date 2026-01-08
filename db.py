@@ -85,6 +85,35 @@ def init_db():
         """
         )
 
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS temporary_collaborations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                master_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                closed_at TEXT,
+                master_tg_id INTEGER,
+                master_username TEXT
+            )
+        """
+        )
+
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fast_connect_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT NOT NULL UNIQUE,
+                company_id INTEGER NOT NULL,
+                master_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                used_at TEXT
+            )
+        """
+        )
+
         # Миграции
         for ddl in (
             "ALTER TABLE users ADD COLUMN phone TEXT",
@@ -99,6 +128,8 @@ def init_db():
             "ALTER TABLE masters ADD COLUMN notes TEXT",
             "ALTER TABLE masters ADD COLUMN created_at TEXT",
             "ALTER TABLE employments ADD COLUMN leave_requested_at TEXT",
+            "ALTER TABLE temporary_collaborations ADD COLUMN master_tg_id INTEGER",
+            "ALTER TABLE temporary_collaborations ADD COLUMN master_username TEXT",
         ):
             try:
                 c.execute(ddl)
@@ -115,6 +146,11 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_employments_company_id ON employments(company_id)",
             "CREATE INDEX IF NOT EXISTS idx_employments_status ON employments(status)",
             "CREATE INDEX IF NOT EXISTS idx_employments_leave_requested_at ON employments(leave_requested_at)",
+            "CREATE INDEX IF NOT EXISTS idx_temp_collabs_company_id ON temporary_collaborations(company_id)",
+            "CREATE INDEX IF NOT EXISTS idx_temp_collabs_master_id ON temporary_collaborations(master_id)",
+            "CREATE INDEX IF NOT EXISTS idx_temp_collabs_status ON temporary_collaborations(status)",
+            "CREATE INDEX IF NOT EXISTS idx_fast_connect_invites_token ON fast_connect_invites(token)",
+            "CREATE INDEX IF NOT EXISTS idx_fast_connect_invites_status ON fast_connect_invites(status)",
             "CREATE INDEX IF NOT EXISTS idx_reviews_master_id ON reviews(master_id)",
             "CREATE INDEX IF NOT EXISTS idx_reviews_company_id ON reviews(company_id)",
             "CREATE INDEX IF NOT EXISTS idx_reviews_employment_id ON reviews(employment_id)",
@@ -1032,6 +1068,165 @@ def end_employment(employment_id: int):
             WHERE id = ?
         """,
             (utc_now_iso(), employment_id),
+        )
+
+
+# Temporary collaborations ----------------------------------------------------
+
+
+def _generate_fast_connect_token() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def create_fast_connect_invite(company_id: int, master_id: int) -> dict:
+    created_at = utc_now_iso()
+    max_attempts = 5
+    attempt = 0
+    while attempt < max_attempts:
+        token = _generate_fast_connect_token()
+        try:
+            with closing(get_conn()) as conn, conn:
+                conn.execute(
+                    """
+                    INSERT INTO fast_connect_invites (token, company_id, master_id, status, created_at)
+                    VALUES (?, ?, ?, 'pending', ?)
+                    """,
+                    (token, company_id, master_id, created_at),
+                )
+            return {"token": token, "company_id": company_id, "master_id": master_id}
+        except sqlite3.IntegrityError:
+            attempt += 1
+            continue
+    raise RuntimeError("Не удалось создать уникальную ссылку для быстрого коннекта.")
+
+
+def get_fast_connect_invite_by_token(token: str) -> Optional[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT f.*,
+                   c.name as company_name,
+                   c.public_id as company_public_id,
+                   m.full_name as master_full_name,
+                   m.public_id as master_public_id,
+                   m.tg_id as master_tg_id,
+                   m.phone as master_phone
+            FROM fast_connect_invites f
+            JOIN companies c ON f.company_id = c.id
+            JOIN masters m ON f.master_id = m.id
+            WHERE f.token = ?
+            """,
+            (token,),
+        )
+        return _row(c.fetchone())
+
+
+def mark_fast_connect_invite_used(invite_id: int):
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            UPDATE fast_connect_invites
+            SET status = 'used', used_at = ?
+            WHERE id = ?
+            """,
+            (utc_now_iso(), invite_id),
+        )
+
+
+def get_active_temporary_collaboration(company_id: int, master_id: int) -> Optional[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT *
+            FROM temporary_collaborations
+            WHERE company_id = ? AND master_id = ? AND status = 'active'
+            """,
+            (company_id, master_id),
+        )
+        return _row(c.fetchone())
+
+
+def create_temporary_collaboration(
+    company_id: int,
+    master_id: int,
+    master_tg_id: Optional[int],
+    master_username: Optional[str],
+) -> dict:
+    started_at = utc_now_iso()
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            INSERT INTO temporary_collaborations (
+                company_id,
+                master_id,
+                status,
+                started_at,
+                master_tg_id,
+                master_username
+            )
+            VALUES (?, ?, 'active', ?, ?, ?)
+            """,
+            (company_id, master_id, started_at, master_tg_id, master_username),
+        )
+        c = conn.cursor()
+        c.execute(
+            "SELECT * FROM temporary_collaborations WHERE rowid = last_insert_rowid()"
+        )
+        return dict(c.fetchone())
+
+
+def get_company_temporary_collaborations(company_id: int, statuses: List[str]) -> List[dict]:
+    if not statuses:
+        return []
+    placeholders = ",".join("?" for _ in statuses)
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            f"""
+            SELECT t.*,
+                   m.full_name,
+                   m.public_id as master_public_id,
+                   m.phone as master_phone
+            FROM temporary_collaborations t
+            JOIN masters m ON t.master_id = m.id
+            WHERE t.company_id = ? AND t.status IN ({placeholders})
+            ORDER BY datetime(t.started_at) DESC, t.id DESC
+            """,
+            (company_id, *statuses),
+        )
+        return [dict(row) for row in c.fetchall()]
+
+
+def get_temporary_collaboration_by_id(collaboration_id: int) -> Optional[dict]:
+    with closing(get_conn()) as conn:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT t.*,
+                   m.full_name,
+                   m.public_id as master_public_id,
+                   m.phone as master_phone,
+                   COALESCE(t.master_tg_id, m.tg_id) as master_tg_id
+            FROM temporary_collaborations t
+            JOIN masters m ON t.master_id = m.id
+            WHERE t.id = ?
+            """,
+            (collaboration_id,),
+        )
+        return _row(c.fetchone())
+
+
+def close_temporary_collaboration(collaboration_id: int, status: str):
+    with closing(get_conn()) as conn, conn:
+        conn.execute(
+            """
+            UPDATE temporary_collaborations
+            SET status = ?, closed_at = ?
+            WHERE id = ?
+            """,
+            (status, utc_now_iso(), collaboration_id),
         )
 
 
