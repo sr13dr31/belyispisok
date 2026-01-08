@@ -65,19 +65,24 @@ from db import (
     create_review_appeal,
     delete_review,
     end_employment,
+    create_fast_connect_invite,
     get_active_appeal_for_review_and_master,
+    get_active_temporary_collaboration,
     get_company_by_id,
     get_company_by_public_id,
     get_company_by_user,
     get_company_employments,
     get_company_ended_employments,
     get_company_requests_count,
+    get_company_temporary_collaborations,
     get_company_verification_by_company_id,
     get_current_employment,
     get_employment_by_id,
+    get_fast_connect_invite_by_token,
     get_master_by_id,
     get_master_by_public_id,
     get_master_by_user,
+    get_temporary_collaboration_by_id,
     get_or_create_user,
     get_pending_company_appeals,
     get_pending_employments_for_company,
@@ -89,7 +94,10 @@ from db import (
     has_any_current_employment,
     has_pending_or_active_employment,
     has_pending_request_for_company,
+    mark_fast_connect_invite_used,
     set_company_subscription,
+    close_temporary_collaboration,
+    create_temporary_collaboration,
     set_employment_accepted,
     set_employment_leave_requested,
     set_employment_rejected,
@@ -108,6 +116,9 @@ from keyboards import (
     appeal_button_kb,
     company_appeal_actions_kb,
     company_appeals_kb,
+    company_collaboration_actions_kb,
+    company_collaboration_list_item_kb,
+    company_collaborations_filter_kb,
     company_employee_actions_kb,
     company_employees_kb,
     company_ended_employees_kb,
@@ -119,6 +130,7 @@ from keyboards import (
     company_subscription_plans_kb,
     company_leave_requests_kb,
     company_leave_request_actions_kb,
+    fastconnect_confirm_kb,
     master_menu_kb,
     master_review_actions_kb,
     master_reviews_kb,
@@ -189,6 +201,14 @@ def ensure_company_can_act(company: dict, require_subscription: bool = True) -> 
             "У компании нет активной подписки или она истекла.\n\n"
             "Оформите или продлите подписку через пункт «Подписка и оплата» в меню."
         )
+    return None
+
+
+def build_chat_link(telegram_id: Optional[int], username: Optional[str]) -> Optional[str]:
+    if telegram_id:
+        return f"tg://user?id={telegram_id}"
+    if username:
+        return f"https://t.me/{username}"
     return None
 
 
@@ -362,9 +382,47 @@ async def auto_review_appeals_maintenance():
 # ==========================
 
 
+async def handle_fastconnect_start(message: Message, token: str):
+    invite = get_fast_connect_invite_by_token(token)
+    if not invite or invite.get("status") != "pending":
+        await message.answer("Ссылка на быстрый коннект недействительна или уже использована.")
+        return
+
+    master = get_master_by_user(message.from_user.id)
+    if not master:
+        await message.answer(
+            "Для подтверждения сотрудничества нужно зарегистрироваться как исполнитель.\n"
+            "Перейдите в /role, выберите роль исполнителя и завершите регистрацию, "
+            "затем откройте эту ссылку снова."
+        )
+        return
+
+    if master["id"] != invite["master_id"]:
+        await message.answer("Эта ссылка предназначена для другого исполнителя.")
+        return
+
+    if get_active_temporary_collaboration(invite["company_id"], master["id"]):
+        await message.answer("У вас уже есть активное сотрудничество с этой компанией.")
+        return
+
+    text = (
+        "Вас приглашают к оперативному сотрудничеству.\n\n"
+        f"Компания: {invite['company_name']} ({invite['company_public_id']})\n"
+        "Подтвердите, чтобы создать сотрудничество."
+    )
+    await message.answer(text, reply_markup=fastconnect_confirm_kb(token))
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     get_or_create_user(message)
+    args = message.get_args()
+    if args and args.startswith("fastconnect_"):
+        token = args.split("fastconnect_", 1)[-1]
+        if token:
+            await handle_fastconnect_start(message, token)
+            return
+
     text = (
         "👋 Добро пожаловать в «Белый список»\n\n"
         "«Белый список» — это сервис учёта профессионального взаимодействия\n"
@@ -439,6 +497,34 @@ async def cmd_menu(message: Message):
         return
 
     await message.answer("Выберите вашу роль:", reply_markup=role_keyboard())
+
+
+async def prompt_fastconnect(message: Message, company: dict):
+    await message.answer(
+        "Введите ID исполнителя (например, M-123456), чтобы создать быстрый коннект:",
+        reply_markup=back_kb(),
+    )
+    set_state(
+        message.from_user.id,
+        "company_fastconnect_master_id",
+        company_id=company["id"],
+    )
+
+
+@dp.message(Command("fastconnect"))
+async def cmd_fastconnect(message: Message):
+    tg_id = message.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    msg = ensure_company_can_act(company, require_subscription=False)
+    if msg:
+        await message.answer(msg)
+        return
+
+    await prompt_fastconnect(message, company)
 
 
 @dp.message(Command("info"))
@@ -956,6 +1042,266 @@ async def cb_company_employees(callback: CallbackQuery):
             "Ниже вы можете посмотреть уволенных сотрудников:",
             reply_markup=company_ended_list_button_kb(),
         )
+
+
+@dp.callback_query(F.data == "company_fastconnect")
+async def cb_company_fastconnect(callback: CallbackQuery):
+    tg_id = callback.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await callback.message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    msg = ensure_company_can_act(company, require_subscription=False)
+    if msg:
+        await callback.message.answer(msg)
+        return
+
+    await prompt_fastconnect(callback.message, company)
+
+
+@dp.callback_query(F.data == "company_collaborations")
+async def cb_company_collaborations(callback: CallbackQuery):
+    tg_id = callback.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await callback.message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    msg = ensure_company_can_act(company, require_subscription=False)
+    if msg:
+        await callback.message.answer(msg)
+        return
+
+    await callback.message.answer(
+        "Выберите тип сотрудничеств:",
+        reply_markup=company_collaborations_filter_kb(),
+    )
+
+
+async def send_company_collaborations_list(
+    message: Message,
+    company: dict,
+    statuses: list[str],
+    empty_text: str,
+):
+    collaborations = get_company_temporary_collaborations(company["id"], statuses)
+    if not collaborations:
+        await message.answer(empty_text)
+        return
+
+    for collab in collaborations:
+        phone = collab.get("master_phone") or "не указан"
+        text = (
+            f"Мастер: {collab['full_name']} ({collab['master_public_id']})\n"
+            f"Телефон: {phone}\n"
+            f"ID: {collab['master_public_id']}\n"
+            f"Дата начала: {collab.get('started_at') or '-'}"
+        )
+        await message.answer(
+            text,
+            reply_markup=company_collaboration_list_item_kb(collab["id"]),
+        )
+
+
+@dp.callback_query(F.data == "company_collabs_active")
+async def cb_company_collabs_active(callback: CallbackQuery):
+    tg_id = callback.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await callback.message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    msg = ensure_company_can_act(company, require_subscription=False)
+    if msg:
+        await callback.message.answer(msg)
+        return
+
+    await send_company_collaborations_list(
+        callback.message,
+        company,
+        ["active"],
+        "Активных сотрудничеств пока нет.",
+    )
+
+
+@dp.callback_query(F.data == "company_collabs_archive")
+async def cb_company_collabs_archive(callback: CallbackQuery):
+    tg_id = callback.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await callback.message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    msg = ensure_company_can_act(company, require_subscription=False)
+    if msg:
+        await callback.message.answer(msg)
+        return
+
+    await send_company_collaborations_list(
+        callback.message,
+        company,
+        ["closed_success", "closed_problem"],
+        "В архиве пока нет сотрудничеств.",
+    )
+
+
+@dp.callback_query(F.data.startswith("company_collab_open_"))
+async def cb_company_collab_open(callback: CallbackQuery):
+    tg_id = callback.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await callback.message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    msg = ensure_company_can_act(company, require_subscription=False)
+    if msg:
+        await callback.message.answer(msg)
+        return
+
+    try:
+        collaboration_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        await callback.message.answer("Некорректные данные.")
+        return
+
+    collaboration = get_temporary_collaboration_by_id(collaboration_id)
+    if not collaboration or collaboration["company_id"] != company["id"]:
+        await callback.message.answer("Сотрудничество не найдено.")
+        return
+
+    chat_link = build_chat_link(
+        collaboration.get("master_tg_id"),
+        collaboration.get("master_username"),
+    )
+    if not chat_link:
+        chat_link = "https://t.me"
+
+    lines = [
+        f"Мастер: {collaboration['full_name']} ({collaboration['master_public_id']})",
+        f"Телефон: {collaboration.get('master_phone') or 'не указан'}",
+        f"Статус: {collaboration['status']}",
+        f"Дата начала: {collaboration.get('started_at') or '-'}",
+    ]
+    if collaboration.get("closed_at"):
+        lines.append(f"Дата закрытия: {collaboration['closed_at']}")
+
+    can_close = collaboration["status"] == "active"
+    await callback.message.answer(
+        "\n".join(lines),
+        reply_markup=company_collaboration_actions_kb(
+            collaboration_id,
+            chat_link,
+            can_close=can_close,
+        ),
+    )
+
+
+@dp.callback_query(F.data.startswith("company_collab_close_success_"))
+async def cb_company_collab_close_success(callback: CallbackQuery):
+    await handle_company_collab_close(callback, "closed_success")
+
+
+@dp.callback_query(F.data.startswith("company_collab_close_problem_"))
+async def cb_company_collab_close_problem(callback: CallbackQuery):
+    await handle_company_collab_close(callback, "closed_problem")
+
+
+async def handle_company_collab_close(callback: CallbackQuery, status: str):
+    tg_id = callback.from_user.id
+    company = get_company_by_user(tg_id)
+    if not company:
+        await callback.message.answer("Вы ещё не зарегистрированы как компания.")
+        return
+
+    msg = ensure_company_can_act(company, require_subscription=False)
+    if msg:
+        await callback.message.answer(msg)
+        return
+
+    try:
+        collaboration_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        await callback.message.answer("Некорректные данные.")
+        return
+
+    collaboration = get_temporary_collaboration_by_id(collaboration_id)
+    if not collaboration or collaboration["company_id"] != company["id"]:
+        await callback.message.answer("Сотрудничество не найдено.")
+        return
+
+    if collaboration["status"] != "active":
+        await callback.message.answer("Это сотрудничество уже закрыто.")
+        return
+
+    close_temporary_collaboration(collaboration_id, status)
+    await callback.message.answer("Сотрудничество закрыто.")
+
+    master = get_master_by_id(collaboration["master_id"])
+    if master:
+        try:
+            await bot.send_message(
+                master["tg_id"],
+                f"Компания {company['name']} закрыла временное сотрудничество с вами.",
+            )
+        except Exception:
+            logger.exception(
+                "Не удалось уведомить мастера %s о закрытии временного сотрудничества",
+                master["id"],
+            )
+
+
+@dp.callback_query(F.data.startswith("fastconnect_confirm_"))
+async def cb_fastconnect_confirm(callback: CallbackQuery):
+    token = callback.data.split("fastconnect_confirm_", 1)[-1]
+    invite = get_fast_connect_invite_by_token(token)
+    if not invite or invite.get("status") != "pending":
+        await callback.message.answer("Ссылка на быстрый коннект недействительна или уже использована.")
+        return
+
+    master = get_master_by_user(callback.from_user.id)
+    if not master:
+        await callback.message.answer("Вы ещё не зарегистрированы как исполнитель.")
+        return
+
+    if master["id"] != invite["master_id"]:
+        await callback.message.answer("Эта ссылка предназначена для другого исполнителя.")
+        return
+
+    existing = get_active_temporary_collaboration(invite["company_id"], master["id"])
+    if existing:
+        mark_fast_connect_invite_used(invite["id"])
+        await callback.message.answer("У вас уже есть активное сотрудничество с этой компанией.")
+        return
+
+    user = get_user(callback.from_user.id)
+    collaboration = create_temporary_collaboration(
+        invite["company_id"],
+        master["id"],
+        master.get("tg_id"),
+        user.get("username") if user else None,
+    )
+    mark_fast_connect_invite_used(invite["id"])
+
+    await callback.message.answer(
+        "Сотрудничество подтверждено ✅\n"
+        "Компания сможет закрыть его вручную после завершения работ."
+    )
+
+    company = get_company_by_id(invite["company_id"])
+    if company:
+        try:
+            await bot.send_message(
+                company["tg_id"],
+                "Исполнитель подтвердил быстрое сотрудничество.\n"
+                f"Мастер: {invite['master_full_name']} ({invite['master_public_id']})\n"
+                f"ID сотрудничества: {collaboration['id']}",
+            )
+        except Exception:
+            logger.exception(
+                "Не удалось уведомить компанию %s о подтверждении быстрого коннекта",
+                company["id"],
+            )
 
 
 @dp.callback_query(F.data.startswith("company_employee_"))
@@ -1898,6 +2244,68 @@ async def generic_message_handler(message: Message):
                 )
             except Exception:
                 logger.exception("Не удалось уведомить компанию %s о новом запросе", company_id)
+        return
+
+    if action == "company_fastconnect_master_id":
+        public_id = message.text.strip().upper()
+        is_valid, error_msg = validate_public_id(public_id)
+        if not is_valid:
+            await message.answer(f"❌ {error_msg}\n\nПопробуйте ещё раз:")
+            return
+
+        company_id = state.data["company_id"]
+        company = get_company_by_user(tg_id)
+        if not company or company["id"] != company_id:
+            await message.answer("Ошибка контекста компании. Попробуйте начать заново.")
+            pop_state(tg_id)
+            return
+
+        msg = ensure_company_can_act(company, require_subscription=False)
+        if msg:
+            await message.answer(msg)
+            pop_state(tg_id)
+            return
+
+        master = get_master_by_public_id(public_id)
+        if not master:
+            await message.answer("Исполнитель с таким ID не найден.")
+            pop_state(tg_id)
+            return
+
+        if master.get("blocked"):
+            await message.answer("Профиль исполнителя заблокирован, быстрый коннект недоступен.")
+            pop_state(tg_id)
+            return
+
+        existing = get_active_temporary_collaboration(company["id"], master["id"])
+        if existing:
+            await message.answer("У вас уже есть активное сотрудничество с этим мастером.")
+            pop_state(tg_id)
+            return
+
+        invite = create_fast_connect_invite(company["id"], master["id"])
+        bot_info = await bot.get_me()
+        bot_username = bot_info.username
+        link = f"https://t.me/{bot_username}?start=fastconnect_{invite['token']}"
+
+        pop_state(tg_id)
+        await message.answer(
+            "Готово! Отправьте эту ссылку мастеру для подтверждения сотрудничества:\n"
+            f"{link}",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+        try:
+            await bot.send_message(
+                master["tg_id"],
+                (
+                    f"Компания {company['name']} приглашает вас к быстрому сотрудничеству.\n"
+                    "Нажмите кнопку ниже для подтверждения."
+                ),
+                reply_markup=fastconnect_confirm_kb(invite["token"]),
+            )
+        except Exception:
+            logger.exception("Не удалось отправить ссылку на быстрый коннект мастеру %s", master["id"])
         return
 
     # === Регистрация компании ===
